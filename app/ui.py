@@ -5,7 +5,7 @@ import tempfile
 
 import pymupdf as fitz
 from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPageSize, QPageLayout, QFontDatabase, QKeySequence, QShortcut, QColor
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPageSize, QPageLayout, QFontDatabase, QKeySequence, QShortcut, QColor, QIcon
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -103,7 +103,7 @@ class Window(QMainWindow):
         self._issue_labels = {}
         self._form_focus = None
         self._fields: dict[str,QLineEdit|QPlainTextEdit] = {}
-        self.setWindowTitle("Druki Pocztowe — wpłata / przelew")
+        self.setWindowTitle("Polecenie przelewu — wpłata / przelew")
         self.resize(850, 600)
         self.setMinimumSize(760, 550)
         self._make_ui()
@@ -947,10 +947,17 @@ def print_a4(data: Payment, printer: QPrinter):
 
 
 def run():
+    import sys
     app = QApplication.instance() or QApplication([])
-    app.setOrganizationName("Druki Pocztowe")
-    app.setApplicationName("Druki Pocztowe")
-    folder = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
+    app.setOrganizationName("Polecenie przelewu")
+    app.setApplicationName("Polecenie przelewu")
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    icon_path = base / "assets" / "icon.icns"
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
+    new_folder = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
+    legacy_folder = Path.home() / "Library" / "Application Support" / "Druki Pocztowe"
+    folder = legacy_folder if legacy_folder.exists() else new_folder
     db = Database(folder/"historia.sqlite3")
     window = Window(db)
     window.show()

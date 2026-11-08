@@ -11,7 +11,9 @@ if [[ -z "${PYTHON_BIN:-}" ]]; then
 fi
 "$PYTHON_BIN" -m pip install -r requirements-macos-lock.txt
 "$PYTHON_BIN" -m PyInstaller --clean --noconfirm --windowed \
-    --target-architecture arm64 --name "Druki Pocztowe" \
+    --target-architecture arm64 --name "Polecenie przelewu" \
     --osx-bundle-identifier pl.drukipocztowe.desktop \
-    --add-data "assets/template.pdf:assets" main.py
-printf '\nZbudowano dist/Druki Pocztowe.app\n'
+    --icon "assets/icon.icns" \
+    --add-data "assets/template.pdf:assets" \
+    --add-data "assets/icon.icns:assets" main.py
+printf '\nZbudowano dist/Polecenie przelewu.app\n'

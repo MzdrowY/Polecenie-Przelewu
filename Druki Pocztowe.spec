@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/template.pdf', 'assets')],
+    datas=[('assets/template.pdf', 'assets'), ('assets/icon.icns', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -21,7 +21,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Druki Pocztowe',
+    name='Polecenie przelewu',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -40,11 +40,11 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='Druki Pocztowe',
+    name='Polecenie przelewu',
 )
 app = BUNDLE(
     coll,
-    name='Druki Pocztowe.app',
-    icon=None,
-    bundle_identifier='pl.drukipocztowe.desktop',
+    name='Polecenie przelewu.app',
+    icon='assets/icon.icns',
+    bundle_identifier='pl.polecenieprzelewu.desktop',
 )

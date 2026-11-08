@@ -1,4 +1,4 @@
-# Polecenie przelewu — Druki Pocztowe
+# Polecenie przelewu
 
 Aplikacja desktopowa (PySide6 + PyMuPDF) do wypełniania i drukowania
 pocztowych blankietów wpłaty gotówkowej (W) i polecenia przelewu (P)
@@ -29,6 +29,13 @@ tests/      # testy jednostkowe i GUI
 scripts/    # build_macos.command, build_windows.ps1
 docs/       # instrukcja, raport testów, stan projektu
 ```
+
+## Podpis i dystrybucja
+
+Aplikacja **nie jest podpisana** certyfikatem Apple Developer (unsigned).
+Na macOS Gatekeeper może zablokować pierwsze uruchomienie — zezwól w
+Ustawienia systemowe → Prywatność i bezpieczeństwo, albo uruchom z terminala:
+`xattr -dr com.apple.quarantine "Polecenie przelewu.app"`.
 
 ## Wersja
 
