@@ -284,10 +284,11 @@ class CoreTests(unittest.TestCase):
             with patch("app.pdfgen._draw") as draw:
                 add_fitted_line(page, font, txt, ACCOUNT_X, 240, size=9.2)
         self.assertEqual(draw.call_count, 1)
-        kwargs=draw.call_args.kwargs
-        self.assertAlmostEqual(draw.call_args.args[1] + font.text_length(txt,fontsize=9.2)*kwargs['xscale'],
-                               ACCOUNT_X[-1]*PX_PT-1, places=3)
-        self.assertGreater(kwargs['xscale'], 1.0)  # ten przypadek wcześniej zajmował około 2/3 pola
+        kwargs = draw.call_args.kwargs
+        # Gdy naturalny napis mieści się w polu: brak rozciągania (xscale == 1).
+        self.assertEqual(kwargs['xscale'], 1.0)
+        expected_right = draw.call_args.args[1] + font.text_length(txt, fontsize=9.2)
+        self.assertLessEqual(expected_right, ACCOUNT_X[-1] * PX_PT - 1)
 
     def test_extremely_long_words_shrink_to_right_edge(self):
         from app.pdfgen import add_fitted_line, PX_PT

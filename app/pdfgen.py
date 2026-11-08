@@ -101,6 +101,10 @@ def add_fitted_line(page: fitz.Page, font: fitz.Font, text: str,
     if width <= 0 or right <= left:
         raise InvalidPayment("Nie można ustalić szerokości nadruku.")
     scale = (right - left) / width
+    if scale > 1.0:
+        # Przy przekroczeniu kratek ściskamy, nigdy nie rozciągamy powyżej
+        # naturalnej wielkości glifów.
+        scale = 1.0
     _draw(page, left, y, text, font, size, xscale=scale)
 
 
