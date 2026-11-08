@@ -15,3 +15,6 @@ historia.sqlite3
 
 # System
 .DS_Store
+
+# PyInstaller generated spec
+Polecenie przelewu.spec

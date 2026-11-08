@@ -1,11 +1,13 @@
 """Graficzny interfejs Qt; nie używa internetu ani zewnętrznych kont."""
 from __future__ import annotations
 from pathlib import Path
+import json
 import tempfile
+import urllib.request
 
 import pymupdf as fitz
-from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPageSize, QPageLayout, QFontDatabase, QKeySequence, QShortcut, QColor, QIcon
+from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF, QUrl
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPageSize, QPageLayout, QFontDatabase, QKeySequence, QShortcut, QColor, QIcon, QAction, QDesktopServices
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -55,16 +57,16 @@ QLineEdit#account { font-size: 20px; font-weight: 700; }
 QLineEdit#amount { font-size: 22px; font-weight: 700; }
 QLineEdit#personName { font-size: 15px; font-weight: 500; }
 QLineEdit#personAddress { font-size: 14px; color: #3f3d39; }
-QLabel#amountWords { color: #57534e; font-size: 12px; padding: 0 10px; }
+QLabel#amountWords { color: #57534e; font-size: 12px; padding: 0 10px 0 0; }
 QLineEdit[searchField="true"] { background: white; border: 1px solid #e4e2dd; padding: 7px 9px; }
 QLineEdit[searchField="true"]:focus { border-color: #78756e; }
 QPushButton { border: 1px solid #d6d3cd; border-radius: 8px; padding: 6px 11px;
     background: #ffffff; font-weight: 600; }
 QPushButton:hover { background: #faf9f5; }
 QPushButton:focus { border-color: #78756e; }
-QPushButton#quiet { border: 1px solid transparent; background: transparent;
-    color: #57534e; font-weight: 500; }
-QPushButton#quiet:hover, QPushButton#quiet:checked { background: #eae8e1; }
+QPushButton#quiet { background: #EAE7DF; color: #18181B; border: none;
+    border-radius: 7px; padding: 5px 10px; font-weight: 500; }
+QPushButton#quiet:hover { background: #DEDAD0; }
 QPushButton#quiet:focus { border-color: #78756e; }
 QPushButton#segment { border: 1px solid transparent; background: transparent;
     border-radius: 7px; color: #68655e; font-weight: 500; padding: 4px 10px; }
@@ -104,12 +106,61 @@ class Window(QMainWindow):
         self._form_focus = None
         self._fields: dict[str,QLineEdit|QPlainTextEdit] = {}
         self.setWindowTitle("Polecenie przelewu — wpłata / przelew")
-        self.resize(850, 600)
-        self.setMinimumSize(760, 550)
+        self._make_menu()
+        self.resize(850, 540)
+        self.setMinimumSize(760, 490)
         self._make_ui()
         self.new_document()
         self.refresh_history()
         self.statusBar().clearMessage()
+
+    def _make_menu(self):
+        help_menu = self.menuBar().addMenu("Pomoc")
+        action = QAction("Sprawdź aktualizacje", self)
+        action.triggered.connect(self._check_for_updates)
+        help_menu.addAction(action)
+        about = QAction("O programie", self)
+        about.triggered.connect(self._show_about)
+        help_menu.addAction(about)
+
+    def _check_for_updates(self):
+        from app import __version__
+        url = "https://api.github.com/repos/MzdrowY/Polecenie-Przelewu/releases/latest"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "PoleceniePrzelewu"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            tag = data.get("tag_name", "").lstrip("v")
+            html_url = data.get("html_url", "")
+
+            def _vt(s):
+                parts = []
+                for p in str(s).split("."):
+                    digits = "".join(c for c in p if c.isdigit())
+                    parts.append(int(digits) if digits else 0)
+                while len(parts) < 3:
+                    parts.append(0)
+                return tuple(parts[:3])
+
+            if tag and _vt(tag) > _vt(__version__):
+                reply = QMessageBox.question(
+                    self, "Aktualizacja",
+                    f"Dostępna jest nowa wersja: {tag} (obecna: {__version__}).\nOtworzyć stronę pobierania?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Yes and html_url:
+                    QDesktopServices.openUrl(QUrl(html_url))
+            else:
+                QMessageBox.information(self, "Aktualizacje", f"Używasz aktualnej wersji ({__version__}).")
+        except Exception as exc:
+            QMessageBox.warning(self, "Aktualizacje", f"Nie udało się sprawdzić aktualizacji:\n{exc}")
+
+    def _show_about(self):
+        from app import __version__
+        QMessageBox.about(
+            self, "O programie",
+            f"Polecenie przelewu\nWersja {__version__}\n\nAplikacja desktopowa (PySide6 + PyMuPDF) do wypełniania i drukowania pocztowych blankietów wpłaty gotówkowej (W) i polecenia przelewu (P).\n\nNie jest podpisana certyfikatem Apple Developer.",
+        )
 
     def _make_ui(self):
         self.setStyleSheet(STYLE)

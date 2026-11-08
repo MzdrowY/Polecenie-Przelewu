@@ -37,6 +37,10 @@ Na macOS Gatekeeper może zablokować pierwsze uruchomienie — zezwól w
 Ustawienia systemowe → Prywatność i bezpieczeństwo, albo uruchom z terminala:
 `xattr -dr com.apple.quarantine "Polecenie przelewu.app"`.
 
+## Licencja
+
+MIT — szczegóły w pliku `LICENSE`.
+
 ## Wersja
 
 v0.11 — macOS Apple Silicon (arm64). Windows niezbuwowane.
