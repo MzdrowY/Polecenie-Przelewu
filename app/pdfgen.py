@@ -104,27 +104,6 @@ def add_fitted_line(page: fitz.Page, font: fitz.Font, text: str,
     _draw(page, left, y, text, font, size, xscale=scale)
 
 
-def add_words_left(page: fitz.Page, font: fitz.Font, text: str,
-                   x_edges: list[int], baseline_px: int, dy_px: int = 0,
-                   size: float = 10.5) -> None:
-    """Kwota słownie: jeden, proporcjonalny napis bez rozciągania w poziomie.
-
-    Zaczyna się przy lewym marginesie pola i nie wchodzi w kratkowanie cyfrowe.
-    """
-    text = " ".join(text.upper().split())
-    if not text:
-        return
-    x = x_edges[0] * PX_PT + 1 + _ox()
-    y = (baseline_px + dy_px + BASELINE_SHIFT_PX - 1.5) * PX_PT + _oy()
-    # Proporcjonalny font bez rozciągania; przy bardzo długim napisie
-    # zmniejszamy rozmiar (nigdy szerokości kratek), aby nie wychodził za pole.
-    limit = (x_edges[-1] * PX_PT - 1) - x
-    natural = font.text_length(text, fontsize=size)
-    if natural > limit > 0:
-        size = size * limit / natural
-    _draw(page, x, y, text, font, size)
-
-
 def add_cells(page: fitz.Page, font: fitz.Font, text: str,
               x_edges: list[int], baseline_px: int, dy_px: int = 0,
               right: bool = False, size: float = 9.5,
@@ -258,11 +237,11 @@ def _render_pdf(data: Payment, target: str | Path, *, draft: bool = False) -> Pa
             field(add_cells, None, page, font, numeric_amount, AMOUNT_X, LINES_Y["amount"], offset, right=False)
             if data.amount_end_bar:
                 draw_amount_tail_bar(page, len(numeric_amount), offset)
-            # Kwota słownie: jeden proporcjonalny napis bez rozciągania poziomego.
-            # Dla P w tym polu rysowny jest rachunek zleceniodawcy (kratki).
+            # Kwota słownie traktowana jak pole kratkowe: każda litera w kratce,
+            # a ścisnięcie dopiero po przekroczeniu liczby kratek.
             if data.payment_type == "W":
-                field(add_words_left, None, page, font, words,
-                      ACCOUNT_X, LINES_Y["amount_words"], offset)
+                field(add_cells, None, page, font, words,
+                      ACCOUNT_X, LINES_Y["amount_words"], offset, size=9.2)
             else:
                 field(add_cells, None, page, font, payer_account,
                       ACCOUNT_X, LINES_Y["amount_words"], offset, size=9.2)
