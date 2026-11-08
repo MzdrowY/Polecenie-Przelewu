@@ -123,8 +123,8 @@ def payment_issues(payment: Payment, strict: bool = True) -> list[tuple[str, str
         ("title", "Tytuł"),
     ):
         value = getattr(payment, key)
-        if strict and not value.strip():
-            errors.append((key, f"Uzupełnij pole: {label}."))
+        # Adresy i pozostałe dane opisowe są opcjonalne: przelew trafia na konto.
+        # Walidowany jest tylko rachunek odbiorcy, kwota (i rachunek zleceniodawcy przy P).
         try:
             fit_rows(value, rows=2 if key == "title" else 1)
         except InvalidPayment as exc:
