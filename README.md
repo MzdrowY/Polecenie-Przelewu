@@ -43,4 +43,4 @@ MIT — szczegóły w pliku `LICENSE`.
 
 ## Wersja
 
-v0.11 — macOS Apple Silicon (arm64). Windows niezbuwowane.
+v0.12.0 — macOS Apple Silicon (arm64) + Windows (CI). Zawiera kalibrację druku X/Y, wersjonowanie SQLite, backup JSON, ikonę .ico, workflow Windows.

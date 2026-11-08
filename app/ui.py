@@ -6,14 +6,14 @@ import tempfile
 import urllib.request
 
 import pymupdf as fitz
-from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF, QUrl
+from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF, QUrl, QSettings
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPageSize, QPageLayout, QFontDatabase, QKeySequence, QShortcut, QColor, QIcon, QAction, QDesktopServices
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QButtonGroup, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QStackedWidget,
     QScrollArea, QListWidget, QListWidgetItem, QFileDialog, QMessageBox,
-    QFrame, QGraphicsDropShadowEffect,
+    QFrame, QGraphicsDropShadowEffect, QDoubleSpinBox,
 )
 
 from .models import Payment, InvalidPayment, account_digits, valid_nrb, normalized_amount, payment_issues
@@ -117,6 +117,13 @@ class Window(QMainWindow):
         self.statusBar().clearMessage()
 
     def _make_menu(self):
+        file_menu = self.menuBar().addMenu("Plik")
+        export_action = QAction("Eksportuj kopię zapasową (JSON)…", self)
+        export_action.triggered.connect(self.export_backup)
+        file_menu.addAction(export_action)
+        import_action = QAction("Importuj kopię zapasową (JSON)…", self)
+        import_action.triggered.connect(self.import_backup)
+        file_menu.addAction(import_action)
         help_menu = self.menuBar().addMenu("Pomoc")
         action = QAction("Sprawdź aktualizacje", self)
         action.triggered.connect(self._check_for_updates)
@@ -163,6 +170,57 @@ class Window(QMainWindow):
             self, "O programie",
             f"Polecenie przelewu\nWersja {__version__}\n\nAplikacja desktopowa (PySide6 + PyMuPDF) do wypełniania i drukowania pocztowych blankietów wpłaty gotówkowej (W) i polecenia przelewu (P).\n\nNie jest podpisana certyfikatem Apple Developer.",
         )
+
+    def export_backup(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Eksportuj kopię zapasową", str(Path.home() / "Documents" / "polecenie-przelewu-backup.json"), "JSON (*.json)")
+        if not path:
+            return
+        try:
+            self.db.export_backup(Path(path))
+            self.statusBar().showMessage("Wyeksportowano kopię zapasową: " + path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd eksportu", str(exc))
+
+    def import_backup(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Importuj kopię zapasową", str(Path.home() / "Documents"), "JSON (*.json)")
+        if not path:
+            return
+        try:
+            self.db.import_backup(Path(path))
+            self.refresh_history()
+            self.statusBar().showMessage("Zaimportowano kopię zapasową: " + path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd importu", str(exc))
+
+    def _settings(self):
+        return QSettings("PoleceniePrzelewu", "PoleceniePrzelewu")
+
+    def _load_offset(self, axis):
+        return float(self._settings().value(f"calib_{axis}", 0.0))
+
+    def _save_offset_x(self, value):
+        self._settings().setValue("calib_x", float(value))
+        self._on_offset_changed()
+
+    def _save_offset_y(self, value):
+        self._settings().setValue("calib_y", float(value))
+        self._on_offset_changed()
+
+    def _on_offset_changed(self):
+        if hasattr(self, "_preview_pixmap") and not self._preview_pixmap.isNull():
+            self.show_preview() if False else None
+            # regeneruj podgląd z nową kalibracją
+            try:
+                data = self.validated()
+            except Exception:
+                data = None
+            if data is not None:
+                png = preview_png(data, scale=PREVIEW_SCALE, offset_x_mm=self.offset_x_spin.value(), offset_y_mm=self.offset_y_spin.value())
+                pixmap = QPixmap()
+                if pixmap.loadFromData(QByteArray(png), "PNG"):
+                    self._preview_pixmap = pixmap
+                    self.preview_modes.button(0).setChecked(True)
+                    self._change_preview_mode()
 
     def _make_ui(self):
         self.setStyleSheet(STYLE)
@@ -584,6 +642,24 @@ class Window(QMainWindow):
         self.print_mode_label = QLabel("Druk: tylko tekst na oryginalnym blankiecie")
         self.print_mode_label.setObjectName("muted")
         footer.addWidget(self.print_mode_label)
+        footer.addSpacing(8)
+        calib_label = QLabel("Kalibracja druku:")
+        calib_label.setObjectName("muted")
+        footer.addWidget(calib_label)
+        self.offset_x_spin = QDoubleSpinBox()
+        self.offset_x_spin.setRange(-15.0, 15.0)
+        self.offset_x_spin.setSingleStep(0.5)
+        self.offset_x_spin.setSuffix(" mm X")
+        self.offset_x_spin.setValue(self._load_offset("x"))
+        self.offset_x_spin.valueChanged.connect(self._on_offset_changed)
+        footer.addWidget(self.offset_x_spin)
+        self.offset_y_spin = QDoubleSpinBox()
+        self.offset_y_spin.setRange(-15.0, 15.0)
+        self.offset_y_spin.setSingleStep(0.5)
+        self.offset_y_spin.setSuffix(" mm Y")
+        self.offset_y_spin.setValue(self._load_offset("y"))
+        self.offset_y_spin.valueChanged.connect(self._on_offset_changed)
+        footer.addWidget(self.offset_y_spin)
         footer.addStretch()
         self._button(footer, "Eksportuj PDF", self.export_document)
         print_button = self._button(footer, "Drukuj blankiet", self.print_document, style="printAction")
@@ -707,7 +783,7 @@ class Window(QMainWindow):
         if data is None:
             return
         try:
-            png = preview_png(data, scale=PREVIEW_SCALE)
+            png = preview_png(data, scale=PREVIEW_SCALE, offset_x_mm=self.offset_x_spin.value(), offset_y_mm=self.offset_y_spin.value())
             pixmap = QPixmap()
             if not pixmap.loadFromData(QByteArray(png), "PNG"):
                 raise RuntimeError("Nie można odczytać obrazu PDF.")
@@ -1017,7 +1093,7 @@ class Window(QMainWindow):
 
     def _prepared_pdf(self,data:Payment,target:Path):
         try:
-            return generate_pdf(data,target,strict=True)
+            return generate_pdf(data,target,strict=True,offset_x_mm=self.offset_x_spin.value(),offset_y_mm=self.offset_y_spin.value())
         except Exception as exc:
             QMessageBox.critical(self,"Nie można wygenerować PDF",str(exc))
             return None
@@ -1050,7 +1126,7 @@ class Window(QMainWindow):
             return
         try:
             printer.setFullPage(True)
-            print_a4(data, printer)
+            print_a4(data, printer, self.offset_x_spin.value(), self.offset_y_spin.value())
             self.statusBar().showMessage("Przekazano druk A4 do systemowego sterownika drukarki.")
             self._remember_after_output(data)
         except Exception as exc:
@@ -1086,9 +1162,9 @@ class Window(QMainWindow):
         super().closeEvent(event)
 
 
-def print_a4(data: Payment, printer: QPrinter):
+def print_a4(data: Payment, printer: QPrinter, offset_x_mm: float = 0.0, offset_y_mm: float = 0.0):
     with tempfile.TemporaryDirectory(prefix="druki_print_") as tmp:
-        file = generate_pdf(data, Path(tmp) / "druk.pdf")
+        file = generate_pdf(data, Path(tmp) / "druk.pdf", offset_x_mm=offset_x_mm, offset_y_mm=offset_y_mm)
         with fitz.open(file) as doc:
             dpi = min(printer.resolution(), 600)
             pix = doc[0].get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72), alpha=False)
@@ -1109,7 +1185,11 @@ def run():
     app.setOrganizationName("Polecenie przelewu")
     app.setApplicationName("Polecenie przelewu")
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
-    icon_path = base / "assets" / "icon.icns"
+    import platform
+    if platform.system() == "Windows":
+        icon_path = base / "assets" / "icon.ico"
+    else:
+        icon_path = base / "assets" / "icon.icns"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     new_folder = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))

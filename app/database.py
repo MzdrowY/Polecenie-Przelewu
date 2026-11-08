@@ -7,6 +7,8 @@ import sqlite3
 from .models import Payment, account_digits, valid_nrb
 
 
+SCHEMA_VERSION = 1
+
 class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -26,6 +28,14 @@ class Database:
         )""")
         self.conn.commit()
         self._initialize_recipients()
+        self.run_migrations()
+
+    def run_migrations(self):
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < SCHEMA_VERSION:
+            # v1: schemat bazowy; przyszłe migracje ALTER TABLE tutaj.
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self.conn.commit()
 
     def _initialize_recipients(self):
         with self.conn:
@@ -128,6 +138,35 @@ class Database:
     def delete(self, payment_id: int):
         with self.conn:
             self.conn.execute("DELETE FROM payments WHERE id=?",(payment_id,))
+
+    def export_backup(self, path: str | Path) -> None:
+        path = Path(path)
+        data = {
+            "schema_version": SCHEMA_VERSION,
+            "payments": [dict(r) for r in self.conn.execute("SELECT * FROM payments").fetchall()],
+            "recipients": [dict(r) for r in self.conn.execute("SELECT * FROM recipients").fetchall()],
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def import_backup(self, path: str | Path) -> None:
+        path = Path(path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        with self.conn:
+            self.conn.execute("DELETE FROM payments")
+            self.conn.execute("DELETE FROM recipients")
+            for row in data.get("payments", []):
+                self.conn.execute(
+                    """INSERT INTO payments (id, created_at, updated_at, recipient, recipient_account, amount, data_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (row["id"], row["created_at"], row["updated_at"], row["recipient"],
+                     row["recipient_account"], row["amount"], row["data_json"]),
+                )
+            for row in data.get("recipients", []):
+                self.conn.execute(
+                    """INSERT INTO recipients (name_key, account, name, address) VALUES (?, ?, ?, ?)""",
+                    (row["name_key"], row["account"], row["name"], row["address"]),
+                )
+        self.run_migrations()
 
     def close(self):
         self.conn.close()

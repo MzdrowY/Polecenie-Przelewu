@@ -10,6 +10,23 @@ from .amount_words import amount_in_words
 
 REFERENCE_DPI = 110
 PX_PT = 72 / REFERENCE_DPI
+MM_PT = 72 / 25.4
+
+# Kalibracja drukarki (mm) — przesunięcie wszystkich współrzędnych tekstu.
+_offset_x_mm: float = 0.0
+_offset_y_mm: float = 0.0
+
+def set_calibration(offset_x_mm: float = 0.0, offset_y_mm: float = 0.0) -> None:
+    global _offset_x_mm, _offset_y_mm
+    _offset_x_mm = float(offset_x_mm)
+    _offset_y_mm = float(offset_y_mm)
+
+def _ox() -> float:
+    return _offset_x_mm * MM_PT
+
+def _oy() -> float:
+    return _offset_y_mm * MM_PT
+
 GRID_X = [154,175,197,219,241,263,285,307,329,351,373,394,416,438,
           460,482,504,526,548,570,592,614,636,658,680,701,723,745]
 ACCOUNT_X = GRID_X[:-1]  # 26 białych kratek; ostatnia kolumna siatki nazw jest różowa.
@@ -37,8 +54,13 @@ def template_path() -> Path:
 
 
 def find_font() -> Path:
-    candidates = [
-        os.environ.get("DRUKI_FONT", ""),
+    candidates = [os.environ.get("DRUKI_FONT", "")]
+    # Dołączony font (assets/fonts) — pierwszy wybór, jeśli istnieje.
+    fonts_dir = resource_path("assets/fonts")
+    if fonts_dir.is_dir():
+        for p in sorted(fonts_dir.glob("*.ttf")) + sorted(fonts_dir.glob("*.otf")):
+            candidates.insert(0, str(p))
+    candidates += [
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/Library/Fonts/Arial.ttf",
         "/System/Library/Fonts/Supplemental/Helvetica Neue.ttf",
@@ -55,7 +77,7 @@ def find_font() -> Path:
 
 def _draw(page: fitz.Page, x: float, y: float, text: str,
           font: fitz.Font, fontsize: float, xscale: float = 1) -> None:
-    origin = fitz.Point(x, y)
+    origin = fitz.Point(x + _ox(), y + _oy())
     morph = (origin, fitz.Matrix(xscale, 0, 0, 1, 0, 0)) if abs(xscale - 1) > 0.00001 else None
     page.insert_text(origin, text, fontsize=fontsize, fontname="DrukiFormFont",
                      color=(0.03, 0.06, 0.12), morph=morph, overlay=True)
@@ -72,9 +94,9 @@ def add_fitted_line(page: fitz.Page, font: fitz.Font, text: str,
     text = " ".join(text.upper().split())
     if not text:
         return
-    left = x_edges[0] * PX_PT + 1
-    right = x_edges[-1] * PX_PT - 1
-    y = (baseline_px + dy_px + BASELINE_SHIFT_PX) * PX_PT
+    left = x_edges[0] * PX_PT + 1 + _ox()
+    right = x_edges[-1] * PX_PT - 1 + _ox()
+    y = (baseline_px + dy_px + BASELINE_SHIFT_PX) * PX_PT + _oy()
     width = font.text_length(text, fontsize=size)
     if width <= 0 or right <= left:
         raise InvalidPayment("Nie można ustalić szerokości nadruku.")
@@ -118,11 +140,11 @@ def add_cells(page: fitz.Page, font: fitz.Font, text: str,
         if char == " ":
             continue
         k = positions[i]
-        left = x_edges[k] * PX_PT
-        right_edge = x_edges[k+1] * PX_PT
+        left = x_edges[k] * PX_PT + _ox()
+        right_edge = x_edges[k+1] * PX_PT + _ox()
         width = font.text_length(char, fontsize=size)
         x = left + (right_edge - left - width) / 2
-        y = (baseline_px + dy_px + BASELINE_SHIFT_PX) * PX_PT
+        y = (baseline_px + dy_px + BASELINE_SHIFT_PX) * PX_PT + _oy()
         _draw(page, x, y, char, font, size)
 
 
@@ -135,9 +157,9 @@ def draw_amount_tail_bar(page: fitz.Page, number_of_characters: int, offset_px: 
     capacity = len(AMOUNT_X) - 1
     if number_of_characters >= capacity or not number_of_characters:
         return
-    x1 = (AMOUNT_X[number_of_characters] + 3.0) * PX_PT
-    x2 = (AMOUNT_X[-1] - 3.0) * PX_PT
-    y = (LINES_Y["amount"] + offset_px + BASELINE_SHIFT_PX - 5.6) * PX_PT
+    x1 = (AMOUNT_X[number_of_characters] + 3.0) * PX_PT + _ox()
+    x2 = (AMOUNT_X[-1] - 3.0) * PX_PT + _ox()
+    y = (LINES_Y["amount"] + offset_px + BASELINE_SHIFT_PX - 5.6) * PX_PT + _oy()
     if x2 > x1:
         page.draw_line(fitz.Point(x1, y), fitz.Point(x2, y),
                        color=(0.06, 0.08, 0.11), width=1.0, overlay=True)
@@ -146,15 +168,17 @@ def draw_amount_tail_bar(page: fitz.Page, number_of_characters: int, offset_px: 
 def draw_wp_cross(page: fitz.Page, payment_type: str, offset_px: int = 0) -> None:
     """Przekreślenie nieużywanej litery: W => P, P => W."""
     unused = "P" if payment_type == "W" else "W"
-    x = WP_CENTER_X_PX[unused] * PX_PT
-    y = (WP_CENTER_Y_PX + offset_px) * PX_PT
+    x = WP_CENTER_X_PX[unused] * PX_PT + _ox()
+    y = (WP_CENTER_Y_PX + offset_px) * PX_PT + _oy()
     dx, dy = 5.7 * PX_PT, 8 * PX_PT
     for p1, p2 in [((x-dx,y-dy),(x+dx,y+dy)), ((x-dx,y+dy),(x+dx,y-dy))]:
         page.draw_line(fitz.Point(*p1), fitz.Point(*p2),
                        color=(0.05,0.05,0.05), width=1.0, overlay=True)
 
 
-def generate_pdf(data: Payment, target: str | Path, strict: bool = True) -> Path:
+def generate_pdf(data: Payment, target: str | Path, strict: bool = True,
+                 offset_x_mm: float = 0.0, offset_y_mm: float = 0.0) -> Path:
+    set_calibration(offset_x_mm, offset_y_mm)
     errors = check(data, strict=strict)
     if errors:
         raise InvalidPayment("\n".join(errors))
@@ -228,8 +252,9 @@ def _render_pdf(data: Payment, target: str | Path, *, draft: bool = False) -> Pa
     return path
 
 
-def preview_png(data: Payment, scale: float = 1.25) -> bytes:
+def preview_png(data: Payment, scale: float = 1.25,
+                offset_x_mm: float = 0.0, offset_y_mm: float = 0.0, strict: bool = False) -> bytes:
     with tempfile.TemporaryDirectory(prefix="druki_view_") as tmp:
-        pdf = generate_pdf(data, Path(tmp) / "preview.pdf")
+        pdf = generate_pdf(data, Path(tmp) / "preview.pdf", strict=strict, offset_x_mm=offset_x_mm, offset_y_mm=offset_y_mm)
         with fitz.open(pdf) as doc:
             return doc[0].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes("png")
