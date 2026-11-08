@@ -89,6 +89,10 @@ QListWidget::item { margin: 2px; padding: 8px; border-radius: 6px; }
 QListWidget::item:hover { background: #faf9f6; }
 QListWidget::item:selected { background: #eae8e1; color: #141413; }
 QScrollArea#paperCanvas { background: #e5e3dc; border: none; }
+QDoubleSpinBox { background: #FFFFFF; color: #18181B; border: 1px solid #D6D3CD;
+    border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 500; min-width: 78px; }
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { background: #F3F2EE; border: none; width: 14px; }
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #DEDAD0; }
 """
 
 
@@ -191,6 +195,10 @@ class Window(QMainWindow):
             self.statusBar().showMessage("Zaimportowano kopię zapasową: " + path)
         except Exception as exc:
             QMessageBox.critical(self, "Błąd importu", str(exc))
+
+    def _toggle_grid_text(self, visible):
+        self.grid_toggle.setText("Ukryj siatkę blankietu" if visible else "Pokaż siatkę blankietu")
+        self._resize_preview()
 
     def _settings(self):
         return QSettings("PoleceniePrzelewu", "PoleceniePrzelewu")
@@ -620,9 +628,10 @@ class Window(QMainWindow):
         self.preview_modes.button(0).setChecked(True)
         self.preview_modes.idClicked.connect(self._change_preview_mode)
         header.addStretch()
-        self.grid_toggle = self._button(header, "Pokaż siatkę blankietu", style="chip")
+        self.grid_toggle = self._button(header, "Ukryj siatkę blankietu", style="chip")
         self.grid_toggle.setCheckable(True)
-        self.grid_toggle.toggled.connect(self._resize_preview)
+        self.grid_toggle.setChecked(True)
+        self.grid_toggle.toggled.connect(self._toggle_grid_text)
 
         self.preview_label = QLabel()
         self.preview_label.setAccessibleName("Wypełniony blankiet W/P")
@@ -639,11 +648,11 @@ class Window(QMainWindow):
         layout.addWidget(self.preview_area, 1)
 
         footer = self._bar(layout, "actions")
-        self.print_mode_label = QLabel("Druk: tylko tekst na oryginalnym blankiecie")
+        self.print_mode_label = QLabel("Tryb: tylko tekst (na oryginał)")
         self.print_mode_label.setObjectName("muted")
         footer.addWidget(self.print_mode_label)
         footer.addSpacing(8)
-        calib_label = QLabel("Kalibracja druku:")
+        calib_label = QLabel("Kalibracja:")
         calib_label.setObjectName("muted")
         footer.addWidget(calib_label)
         self.offset_x_spin = QDoubleSpinBox()

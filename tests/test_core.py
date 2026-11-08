@@ -90,9 +90,13 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             pdf=generate_pdf(data,Path(tmp)/"dlugie.pdf")
             with fitz.open(pdf) as doc:
-                text=doc[0].get_text().replace("\xa0", " ")
-                self.assertEqual(text.count(data.recipient.upper()),2)
-                self.assertIn("DŁUGA PRZYKŁADOWA",text)
+                compact = "".join(doc[0].get_text().replace("\xa0", "").split())
+                # Nazwa odbiorcy dzieli się na dwa wiersze po 27 kratek;
+                # każdy wiersz występuje na obu odcinkach blankietu.
+                rows = fit_rows(data.recipient, rows=2)
+                for row in rows:
+                    self.assertGreaterEqual(compact.count("".join(row.split())), 2)
+                self.assertIn("D\u0141UGAPRZYK\u0141ADOWA", compact)
 
     def test_amount_in_words_polish_inflection(self):
         examples={
