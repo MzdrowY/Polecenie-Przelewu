@@ -1,0 +1,17 @@
+# Artefakty budowania
+dist/
+build/
+*.app/
+*.zip
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Dane użytkownika
+*.sqlite3
+*.db
+historia.sqlite3
+
+# System
+.DS_Store

@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "workspace": "AGENT-HUB",
+  "workspace_folder_id": "1xjGvvuWtjA19TkVcb6IrdEX_OkcViilM",
+  "updated_at": "2026-11-08",
+  "projects": [
+    {
+      "id": "research-memory",
+      "name": "Badania - Pamięć człowieka (Kod i Kawa)",
+      "category": "research",
+      "folder_id": "1Ro4Ey7skaN27qUu68fltQMApRRSDFXze",
+      "url": "https://drive.google.com/drive/folders/1Ro4Ey7skaN27qUu68fltQMApRRSDFXze",
+      "status": "existing; read latest protocol, do not assume completed",
+      "entrypoint": "06 - Protokół i przekazanie stanu - Pamięć człowieka",
+      "write_policy": "only on explicit project task"
+    },
+    {
+      "id": "research-talent",
+      "name": "Badania - Talent (Film 02 - Kod i kawa)",
+      "category": "research",
+      "folder_id": "1N8nlXJNewqttGmbOI0Z4JwNYKsfKlg1W",
+      "url": "https://drive.google.com/drive/folders/1N8nlXJNewqttGmbOI0Z4JwNYKsfKlg1W",
+      "status": "existing; read latest protocol, do not assume completed",
+      "entrypoint": "05 - Protokół i przekazanie stanu - Talent",
+      "write_policy": "only on explicit project task"
+    },
+    {
+      "id": "research-remembrance",
+      "name": "Badania - Polskie Swieto Zmarlych",
+      "category": "research",
+      "folder_id": "1KDbe84XyGrwiOijDpCai4TmnnTpvSO8u",
+      "url": "https://drive.google.com/drive/folders/1KDbe84XyGrwiOijDpCai4TmnnTpvSO8u",
+      "status": "existing; read index, plan and dated research report",
+      "entrypoint": "00 - Indeks i macierz dowodów - Polskie Święto Zmarłych",
+      "write_policy": "only on explicit project task"
+    },
+    {
+      "id": "druki-pocztowe",
+      "name": "Druki Pocztowe — aplikacja",
+      "category": "code",
+      "folder_id": "1WMoPD5DJIY3WLE_FcaJjZqxZ3XKnjefq",
+      "url": "https://drive.google.com/drive/folders/1WMoPD5DJIY3WLE_FcaJjZqxZ3XKnjefq",
+      "status": "v0.11 macOS arm64; redesigned GUI and core functions manually checked; 36 tests passed before final cosmetic background change; physical print and Windows unverified",
+      "entrypoint": "AKTUALNA_WERSJA.md",
+      "write_policy": "only on explicit project task"
+    }
+  ],
+  "method": {
+    "name": "Metoda badawcza M Zdrowowicz",
+    "folder_id": "1-QfAmqwCkFrxnziT77jEblYVyqRkryz5",
+    "url": "https://drive.google.com/drive/folders/1-QfAmqwCkFrxnziT77jEblYVyqRkryz5",
+    "rule": "read existing SKILL.md and current version before applying"
+  },
+  "unconfigured": [
+    "local-obsidian-sync",
+    "home-git-sync",
+    "opencode-access",
+    "ci-deployment"
+  ]
+}
