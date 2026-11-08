@@ -52,7 +52,7 @@ QLineEdit, QPlainTextEdit {
 QLineEdit:focus, QPlainTextEdit:focus { background: #ffffff; border: 1.5px solid #18181b; }
 QPlainTextEdit#note { background: #faf9f6; border: 1px dashed #d6d3cd; }
 QPlainTextEdit#note:focus { background: #ffffff; border: 1.5px solid #18181b; }
-QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"] { background: #fcecea; }
+QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"] { background: #fcecea; border: 1.5px solid #DC2626; }
 QLineEdit#account { font-size: 20px; font-weight: 700; }
 QLineEdit#amount { font-size: 22px; font-weight: 700; }
 QLineEdit#personName { font-size: 15px; font-weight: 500; }
@@ -86,6 +86,7 @@ QPushButton#primary:disabled { background: #e4e2dd; border-color: #e4e2dd; color
 QPushButton#danger { color: #a62f25; }
 QListWidget { background: white; border: 1px solid #e4e2dd; border-radius: 8px; }
 QListWidget::item { margin: 2px; padding: 8px; border-radius: 6px; }
+QListWidget::item:hover { background: #faf9f6; }
 QListWidget::item:selected { background: #eae8e1; color: #141413; }
 QScrollArea#paperCanvas { background: #e5e3dc; border: none; }
 """
@@ -104,6 +105,7 @@ class Window(QMainWindow):
         self._preview_pixmap = QPixmap()
         self._issue_labels = {}
         self._form_focus = None
+        self._active_person = ""
         self._fields: dict[str,QLineEdit|QPlainTextEdit] = {}
         self.setWindowTitle("Polecenie przelewu — wpłata / przelew")
         self._make_menu()
@@ -218,7 +220,8 @@ class Window(QMainWindow):
         self.history.currentItemChanged.connect(self.open_history)
         self.history.itemActivated.connect(lambda: self.history_toggle.setChecked(False))
         left_l.addWidget(self.history, 1)
-        self._button(left_l, "Użyj jako szablonu", self.duplicate_history_item)
+        self._button(left_l, "Wczytaj do edycji", lambda: self.open_history(self.history.currentItem()), style="primary")
+        self._button(left_l, "Użyj jako szablonu", self.duplicate_history_item, style="quiet")
         bdelete = QPushButton("Usuń")
         bdelete.setObjectName("danger")
         bdelete.clicked.connect(self.delete_document)
@@ -255,11 +258,16 @@ class Window(QMainWindow):
         grid.addWidget(self.message, 3, 0)
         fields = self._fields
         order = [fields[k] for k in (
-            "recipient_account", "amount", "recipient", "recipient_address", "payer_account",
+            "recipient_account", "amount", "payer_account", "recipient", "recipient_address",
             "payer", "payer_address", "title", "note",
         )]
         for previous, following in zip(order, order[1:]):
             QWidget.setTabOrder(previous, following)
+        # Przyciski pomocnicze nie zabierają focusu przy Tab.
+        self.amount_stars_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.amount_bar_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        if hasattr(self, "_remember_recipient_button"):
+            self._remember_recipient_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         footer = self._bar(form_layout, "actions")
         self.footer_status = QLabel()
@@ -279,6 +287,13 @@ class Window(QMainWindow):
         shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.form_page)
         shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         shortcut.activated.connect(review.click)
+        shortcut2 = QShortcut(QKeySequence("Meta+Return"), self.form_page)
+        shortcut2.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut2.activated.connect(review.click)
+        new_shortcut = QShortcut(QKeySequence("Ctrl+N"), self)
+        new_shortcut.activated.connect(self.new_document)
+        new_shortcut2 = QShortcut(QKeySequence("Meta+N"), self)
+        new_shortcut2.activated.connect(self.new_document)
         back_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.preview_page)
         back_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         back_shortcut.activated.connect(self.back_to_form)
@@ -410,6 +425,10 @@ class Window(QMainWindow):
         self.payer_account_field.setAccessibleName("Rachunek zleceniodawcy")
         self.shared_fields.addWidget(self.payer_account_field)
         row.addWidget(self.shared_fields, 1)
+        self.payer_account_status = QLabel()
+        self.payer_account_status.setObjectName("muted")
+        row.addWidget(self.payer_account_status)
+        self.payer_account_status.hide()
         layout.addWidget(strip)
         layout.addWidget(self._issue_label("payer_account"))
         return card
@@ -430,8 +449,15 @@ class Window(QMainWindow):
         heading = QHBoxLayout()
         heading.addWidget(self._caption("ODBIORCA" if recipient else "WPŁACAJĄCY / ZLECENIODAWCA"))
         heading.addStretch()
+        count_label = QLabel("0/27 zn.")
+        count_label.setObjectName("count")
         if recipient:
-            self._button(heading, "Zapamiętaj odbiorcę", self.remember_current_recipient, style="quiet")
+            self.recipient_char_count = count_label
+            self._remember_recipient_button = self._button(heading, "Zapamiętaj odbiorcę", self.remember_current_recipient, style="quiet")
+            self._remember_recipient_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        else:
+            self.payer_char_count = count_label
+        heading.addWidget(count_label)
         section.addLayout(heading)
         prefix = "recipient" if recipient else "payer"
         for key, placeholder, accessible in (
@@ -458,7 +484,14 @@ class Window(QMainWindow):
         ):
             cell = QVBoxLayout()
             cell.setSpacing(6)
-            cell.addWidget(self._caption(caption))
+            head = QHBoxLayout()
+            head.addWidget(self._caption(caption))
+            head.addStretch()
+            if key == "title":
+                self.title_char_count = QLabel("0/27 zn.")
+                self.title_char_count.setObjectName("count")
+                head.addWidget(self.title_char_count)
+            cell.addLayout(head)
             field = self._field(key, placeholder, multi=True)
             field.setAccessibleName("Tytuł płatności" if key == "title" else "Notatka do historii")
             cell.addWidget(field)
@@ -502,6 +535,8 @@ class Window(QMainWindow):
         if key == "note":
             field.setObjectName("note")
         field.textChanged.connect(self._clear_error)
+        field.textChanged.connect(self._update_char_counts)
+        field.installEventFilter(self)
         self._fields[key] = field
         if key == "amount":
             field.textChanged.connect(self._update_words)
@@ -510,6 +545,8 @@ class Window(QMainWindow):
             field.editingFinished.connect(lambda: self._format_account(field))
         if key == "recipient_account":
             field.textChanged.connect(self._update_account_status)
+        if key == "payer_account":
+            field.textChanged.connect(self._update_payer_account_status)
         return field
 
     def _build_preview(self):
@@ -519,15 +556,15 @@ class Window(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         header = self._bar(layout, "toolbar")
-        label = QLabel("Sprawdź wydruk")
-        label.setObjectName("appTitle")
-        header.addWidget(label)
+        self.back_button = self._button(header, "← Wróć do edycji (Esc)", self.back_to_form, style="quiet")
         header.addStretch()
-        self.preview_modes = self._segments(header, ("Odcinek 1", "Odcinek 2", "Całe A4"))
+        self.preview_modes = self._segments(header, ("Powiększony odcinek", "Cała strona A4"))
         self.preview_modes.button(0).setChecked(True)
         self.preview_modes.idClicked.connect(self._change_preview_mode)
-        self.zoom_button = self._button(header, "Powiększ", self._resize_preview)
-        self.zoom_button.setCheckable(True)
+        header.addStretch()
+        self.grid_toggle = self._button(header, "Pokaż siatkę blankietu", style="chip")
+        self.grid_toggle.setCheckable(True)
+        self.grid_toggle.toggled.connect(self._resize_preview)
 
         self.preview_label = QLabel()
         self.preview_label.setAccessibleName("Wypełniony blankiet W/P")
@@ -544,10 +581,18 @@ class Window(QMainWindow):
         layout.addWidget(self.preview_area, 1)
 
         footer = self._bar(layout, "actions")
-        self.back_button = self._button(footer, "Wróć do edycji", self.back_to_form)
+        self.print_mode_label = QLabel("Druk: tylko tekst na oryginalnym blankiecie")
+        self.print_mode_label.setObjectName("muted")
+        footer.addWidget(self.print_mode_label)
         footer.addStretch()
-        self._button(footer, "Zapisz PDF…", self.export_document)
-        self._button(footer, "Drukuj A4", self.print_document, style="printAction")
+        self._button(footer, "Eksportuj PDF", self.export_document)
+        print_button = self._button(footer, "Drukuj blankiet", self.print_document, style="printAction")
+        print_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Return), self.preview_page)
+        print_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        print_shortcut.activated.connect(print_button.click)
+        print_shortcut2 = QShortcut(QKeySequence(Qt.Key.Key_Enter), self.preview_page)
+        print_shortcut2.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        print_shortcut2.activated.connect(print_button.click)
 
     def _build_recipients(self):
         self.recipients_page = QWidget()
@@ -672,7 +717,6 @@ class Window(QMainWindow):
         self._preview_pixmap = pixmap
         self._form_focus = self.focusWidget()
         self.preview_modes.button(0).setChecked(True)
-        self.zoom_button.setChecked(False)
         self.pages.setCurrentWidget(self.preview_page)
         self._change_preview_mode()
         self.back_button.setFocus()
@@ -692,8 +736,8 @@ class Window(QMainWindow):
             return
         pixmap = self._preview_pixmap
         mode = self.preview_modes.checkedId()
-        if mode != 2:
-            region = FIRST_RECEIPT.translated(0, mode * SECTION_OFFSET_PX * PX_PT)
+        if mode == 0:
+            region = FIRST_RECEIPT.translated(0, 0)
             pixmap = pixmap.copy(QRect(
                 round(region.x() * PREVIEW_SCALE), round(region.y() * PREVIEW_SCALE),
                 round(region.width() * PREVIEW_SCALE), round(region.height() * PREVIEW_SCALE),
@@ -701,15 +745,29 @@ class Window(QMainWindow):
         # Używamy szerokości obszaru zewnętrznego, aby paski przewijania
         # nie zmieniały naprzemiennie dostępnej szerokości widoku.
         width = max(1, self.preview_area.width() - 28)
-        if self.zoom_button.isChecked():
-            width = round(width * 1.5)
         dpr = self.devicePixelRatioF()
         image = pixmap.scaledToWidth(round(width * dpr), Qt.TransformationMode.SmoothTransformation)
         image.setDevicePixelRatio(dpr)
+        if getattr(self, "grid_toggle", None) is not None and self.grid_toggle.isChecked():
+            painter = QPainter(image)
+            painter.setPen(QColor(180, 180, 180, 120))
+            step = round(20 * dpr)
+            for x in range(0, image.width(), step):
+                painter.drawLine(x, 0, x, image.height())
+            for y in range(0, image.height(), step):
+                painter.drawLine(0, y, image.width(), y)
+            painter.end()
         self.preview_label.setPixmap(image)
         self.preview_label.resize(image.deviceIndependentSize().toSize())
-
     def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.FocusIn:
+            if watched in (self._fields.get("recipient"), self._fields.get("recipient_address")):
+                self._active_person = "recipient"
+            elif watched in (self._fields.get("payer"), self._fields.get("payer_address")):
+                self._active_person = "payer"
+            elif watched in (self._fields.get("title"),):
+                self._active_person = "title"
+            self._update_char_counts()
         if event.type() == QEvent.Type.Resize:
             if watched is self.preview_area.viewport():
                 self._resize_preview()
@@ -717,6 +775,23 @@ class Window(QMainWindow):
                 self._position_history()
         return super().eventFilter(watched, event)
 
+    def _update_char_counts(self):
+        # Tytuł: licznik dla aktywnej linii (cały tytuł, limit 27 na wiersz, ale pokazujemy długość)
+        if hasattr(self, "recipient_char_count"):
+            if getattr(self, "_active_person", "") == "recipient":
+                field = self._fields["recipient"] if self._fields["recipient"].hasFocus() else self._fields["recipient_address"]
+                self.recipient_char_count.setText(f"{len(field.text())}/27 zn.")
+        if hasattr(self, "payer_char_count"):
+            if getattr(self, "_active_person", "") == "payer":
+                field = self._fields["payer"] if self._fields["payer"].hasFocus() else self._fields["payer_address"]
+                self.payer_char_count.setText(f"{len(field.text())}/27 zn.")
+        if hasattr(self, "title_char_count"):
+            if self._fields["title"].hasFocus():
+                # licznik dla aktywnej linii (ostatnia linia)
+                text = self._fields["title"].toPlainText()
+                lines = text.split("\n")
+                last = lines[-1] if lines else ""
+                self.title_char_count.setText(f"{len(last)}/27 zn.")
     def _format_account(self, field):
         try:
             digits = account_digits(field.text())
@@ -746,7 +821,7 @@ class Window(QMainWindow):
         if count == 26:
             valid = valid_nrb(raw)
             self._account_status(
-                "26/26 · Poprawna suma kontrolna" if valid else "26/26 · Błędna suma kontrolna",
+                "✓ 26/26 • Poprawny NRB" if valid else "✕ Błędny numer rachunku",
                 "valid" if valid else "issue",
             )
         else:
@@ -758,6 +833,32 @@ class Window(QMainWindow):
             self.account_status.setObjectName(style)
             self.account_status.style().unpolish(self.account_status)
             self.account_status.style().polish(self.account_status)
+
+    def _update_payer_account_status(self):
+        raw = self._fields["payer_account"].text()
+        try:
+            count = len(account_digits(raw))
+        except InvalidPayment:
+            self._payer_account_status("Rachunek może zawierać cyfry i prefiks PL", "issue")
+            return
+        if not raw.strip():
+            self._payer_account_status("0/26 cyfr", "muted")
+            return
+        if count == 26:
+            valid = valid_nrb(raw)
+            self._payer_account_status(
+                "✓ 26/26 • Poprawny NRB" if valid else "✕ Błędny numer rachunku",
+                "valid" if valid else "issue",
+            )
+        else:
+            self._payer_account_status(f"{count}/26 cyfr", "issue" if count > 26 else "muted")
+
+    def _payer_account_status(self, text, style):
+        self.payer_account_status.setText(text)
+        if self.payer_account_status.objectName() != style:
+            self.payer_account_status.setObjectName(style)
+            self.payer_account_status.style().unpolish(self.payer_account_status)
+            self.payer_account_status.style().polish(self.payer_account_status)
 
     def _clear_error(self):
         self.message.hide()
@@ -793,6 +894,11 @@ class Window(QMainWindow):
         self.words_preview.setEnabled(not is_transfer)
         self.shared_fields.setCurrentIndex(int(is_transfer))
         self.shared_strip.setFixedHeight(46 if is_transfer else 30)
+        if is_transfer:
+            self.payer_account_status.show()
+            self._update_payer_account_status()
+        else:
+            self.payer_account_status.hide()
         self._update_words()
         self._clear_error()
 

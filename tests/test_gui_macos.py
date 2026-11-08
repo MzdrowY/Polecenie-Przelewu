@@ -157,13 +157,10 @@ class MacGuiTests(unittest.TestCase):
         self.assertEqual(self.window.preview_modes.checkedId(), 0)
         self.assertGreaterEqual(self.window.preview_label.width(), 750)
         first = self.window.preview_label.pixmap().toImage()
-        self.click("Odcinek 2")
+        self.click("Cała strona A4")
         self.assertNotEqual(first, self.window.preview_label.pixmap().toImage())
-        self.click("Całe A4")
         self.assertGreater(self.window.preview_label.height(), self.window.preview_label.width())
-        self.click("Powiększ")
-        self.assertGreater(self.window.preview_label.width(), self.window.preview_area.width())
-        self.click("Wróć do edycji")
+        self.click("← Wróć do edycji (Esc)")
         self.assertIs(self.window.pages.currentWidget(), self.window.form_page)
         self.assertEqual(self.window.current_data().title, "Tytuł testowy\nDrugi wiersz")
         self.assertIsNone(self.window.current_id)
@@ -189,7 +186,7 @@ class MacGuiTests(unittest.TestCase):
         dialog = Mock(side_effect=pdf_printer, DialogCode=QPrintDialog.DialogCode)
         self.click("Sprawdź wydruk →")
         with patch("app.ui.QPrintDialog", dialog):
-            self.click("Drukuj A4")
+            self.click("Drukuj blankiet")
         with pymupdf.open(path) as doc:
             self.assertEqual(len(doc), 1)
             page = doc[0]
