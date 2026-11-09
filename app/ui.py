@@ -97,6 +97,15 @@ QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background:
 
 
 PREVIEW_SCALE = 4
+INFO_DIALOG_STYLE = """
+    QDialog#aboutDialog { background: #f3f2ee; }
+    QDialog#aboutDialog QLabel { color: #252420; background: transparent; font-size: 13px; }
+    QDialog#aboutDialog QLabel#aboutTitle { font-size: 18px; font-weight: 700; }
+    QDialog#aboutDialog QLabel#aboutMuted { color: #68655e; font-size: 12px; }
+    QDialog#aboutDialog QPushButton { color: #252420; background: #ffffff;
+        border: 1px solid #d6d3cd; border-radius: 7px; padding: 6px 16px; }
+    QDialog#aboutDialog QPushButton:hover { background: #eae7df; }
+"""
 # Granice drukowanego odcinka w oryginalnym PDF, w punktach.
 FIRST_RECEIPT = QRectF(72, 33, 449, 313)
 
@@ -156,32 +165,53 @@ class Window(QMainWindow):
                 return tuple(parts[:3])
 
             if tag and _vt(tag) > _vt(__version__):
-                reply = QMessageBox.question(
-                    self, "Aktualizacja",
-                    f"Dostępna jest nowa wersja: {tag} (obecna: {__version__}).\nOtworzyć stronę pobierania?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                reply = self._show_update_message(
+                    "Dostępna aktualizacja",
+                    f"Nowa wersja: {tag}\nTwoja wersja: {__version__}\n\nOtworzyć stronę pobierania?",
+                    offer_download=True,
                 )
-                if reply == QMessageBox.StandardButton.Yes and html_url:
+                if reply and html_url:
                     QDesktopServices.openUrl(QUrl(html_url))
             else:
-                QMessageBox.information(self, "Aktualizacje", f"Używasz aktualnej wersji ({__version__}).")
+                self._show_update_message("Aktualizacje", f"Używasz aktualnej wersji ({__version__}).")
         except Exception as exc:
-            QMessageBox.warning(self, "Aktualizacje", f"Nie udało się sprawdzić aktualizacji:\n{exc}")
+            self._show_update_message("Aktualizacje", f"Nie udało się sprawdzić aktualizacji:\n{exc}")
+
+    def _show_update_message(self, heading, message, *, offer_download=False):
+        dialog = QDialog(self)
+        dialog.setObjectName("aboutDialog")
+        dialog.setWindowTitle("Aktualizacje")
+        dialog.setStyleSheet(INFO_DIALOG_STYLE)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(22, 19, 22, 18)
+        layout.setSpacing(12)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        title = QLabel(heading)
+        title.setObjectName("aboutTitle")
+        layout.addWidget(title)
+        text = QLabel(message)
+        text.setTextFormat(Qt.TextFormat.PlainText)
+        text.setWordWrap(True)
+        text.setFixedWidth(300)
+        layout.addWidget(text)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        close = QPushButton("Nie teraz" if offer_download else "Zamknij")
+        close.clicked.connect(dialog.reject)
+        buttons.addWidget(close)
+        if offer_download:
+            open_page = QPushButton("Otwórz stronę")
+            open_page.clicked.connect(dialog.accept)
+            buttons.addWidget(open_page)
+        layout.addLayout(buttons)
+        return dialog.exec() == QDialog.DialogCode.Accepted
 
     def _show_about(self):
         from app import __version__
         dialog = QDialog(self)
         dialog.setObjectName("aboutDialog")
         dialog.setWindowTitle("O programie")
-        dialog.setStyleSheet("""
-            QDialog#aboutDialog { background: #f3f2ee; }
-            QDialog#aboutDialog QLabel { color: #252420; background: transparent; font-size: 13px; }
-            QDialog#aboutDialog QLabel#aboutTitle { font-size: 18px; font-weight: 700; }
-            QDialog#aboutDialog QLabel#aboutMuted { color: #68655e; font-size: 12px; }
-            QDialog#aboutDialog QPushButton { color: #252420; background: #ffffff;
-                border: 1px solid #d6d3cd; border-radius: 7px; padding: 6px 16px; }
-            QDialog#aboutDialog QPushButton:hover { background: #eae7df; }
-        """)
+        dialog.setStyleSheet(INFO_DIALOG_STYLE)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(22, 19, 22, 18)
         layout.setSpacing(9)

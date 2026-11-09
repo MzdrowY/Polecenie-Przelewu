@@ -202,6 +202,29 @@ class MacGuiTests(unittest.TestCase):
         self.assertEqual(len(self.db.all()), 1)
         self.assertIn('historia-przed-importem-', info.call_args.args[2])
 
+    def test_update_check_results_and_download_choice(self):
+        def response(tag):
+            reply = Mock()
+            reply.__enter__ = Mock(return_value=reply)
+            reply.__exit__ = Mock(return_value=False)
+            reply.read.return_value = json.dumps({'tag_name': tag,
+                'html_url': 'https://example.com/release'}).encode()
+            return reply
+        with patch('app.ui.urllib.request.urlopen', return_value=response('v0.12.1')):
+            with patch.object(self.window, '_show_update_message') as message:
+                self.window._check_for_updates()
+                self.assertIn('aktualnej wersji', message.call_args.args[1])
+        with patch('app.ui.urllib.request.urlopen', return_value=response('v0.12.2')):
+            with patch.object(self.window, '_show_update_message', return_value=True) as message:
+                with patch('app.ui.QDesktopServices.openUrl') as open_url:
+                    self.window._check_for_updates()
+                    self.assertTrue(message.call_args.kwargs['offer_download'])
+                    self.assertEqual(open_url.call_args.args[0].toString(), 'https://example.com/release')
+        with patch('app.ui.urllib.request.urlopen', side_effect=OSError('brak połączenia')):
+            with patch.object(self.window, '_show_update_message') as message:
+                self.window._check_for_updates()
+                self.assertIn('brak połączenia', message.call_args.args[1])
+
     def test_print_to_pdf_through_button(self):
         self.fill()
         path = self.root / "print.pdf"
