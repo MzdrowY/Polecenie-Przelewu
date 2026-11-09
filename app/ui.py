@@ -6,7 +6,7 @@ import tempfile
 import urllib.request
 
 import pymupdf as fitz
-from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF, QUrl, QSettings
+from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF, QUrl, QSettings, QTimer
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPageSize, QPageLayout, QFontDatabase, QKeySequence, QShortcut, QColor, QIcon, QAction, QDesktopServices
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtWidgets import (
@@ -1293,4 +1293,11 @@ def run():
     db = Database(folder/"historia.sqlite3")
     window = Window(db)
     window.show()
+    if sys.platform == "darwin" and app.platformName() == "cocoa":
+        from .macos_menu import hide_services_menu
+        QTimer.singleShot(0, hide_services_menu)
+        def update_macos_menu(state):
+            if state == Qt.ApplicationState.ApplicationActive:
+                QTimer.singleShot(0, hide_services_menu)
+        app.applicationStateChanged.connect(update_macos_menu)
     raise SystemExit(app.exec())
