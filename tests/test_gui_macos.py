@@ -32,8 +32,13 @@ class MacGuiTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.db = Database(self.root / "history.sqlite3")
         self.window = Window(self.db)
-        self.addCleanup(self.window.close)
+        self.addCleanup(self.close_window)
         self.window.show()
+
+    def close_window(self):
+        # Testy nie mogą zawiesić się na pytaniu o niezapisane zmiany.
+        self.window._dirty = False
+        self.window.close()
 
     def click(self, label):
         button = next(w for w in self.window.findChildren(QPushButton) if w.text() == label)
@@ -256,6 +261,9 @@ class MacGuiTests(unittest.TestCase):
         with self.db.conn:
             self.db.conn.execute("UPDATE payments SET data_json = ? WHERE id = ?",
                                  (json.dumps(legacy), ident))
+        # Zapis bezpośrednio w bazie nie przechodzi przez UI, więc nie ma
+        # niezapisanych zmian z perspektywy okna.
+        self.window._dirty = False
         self.window.refresh_history()
         self.window.history.setCurrentRow(0)
         self.assertEqual(self.window.current_data(), payment)

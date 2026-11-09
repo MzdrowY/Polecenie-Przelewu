@@ -11,26 +11,42 @@ from .models import Payment, account_digits, valid_nrb
 
 SCHEMA_VERSION = 1
 
+
+class DatabaseOpenError(RuntimeError):
+    """Baza istnieje, ale nie można jej otworzyć ani zainicjować."""
+
+    def __init__(self, path: str | Path, cause: Exception):
+        self.path = Path(path)
+        self.cause = cause
+        super().__init__(f"Nie można otworzyć bazy SQLite: {self.path} ({cause})")
+
+
 class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
-        self.conn.execute("PRAGMA busy_timeout = 3000")
-        self.conn.execute("""CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            recipient TEXT NOT NULL,
-            recipient_account TEXT NOT NULL,
-            amount TEXT NOT NULL,
-            data_json TEXT NOT NULL
-        )""")
-        self.conn.commit()
-        self._initialize_recipients()
-        self.run_migrations()
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.conn = sqlite3.connect(self.path)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            self.conn.execute("PRAGMA busy_timeout = 3000")
+            self.conn.execute("""CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                recipient_account TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                data_json TEXT NOT NULL
+            )""")
+            self.conn.commit()
+            self._initialize_recipients()
+            self.run_migrations()
+        except (sqlite3.Error, OSError) as exc:
+            conn = getattr(self, "conn", None)
+            if conn is not None:
+                conn.close()
+            raise DatabaseOpenError(self.path, exc) from exc
 
     def run_migrations(self):
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]

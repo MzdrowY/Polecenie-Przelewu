@@ -12,6 +12,11 @@ REFERENCE_DPI = 110
 PX_PT = 72 / REFERENCE_DPI
 MM_PT = 72 / 25.4
 
+# Minimalny efektywny rozmiar litery po dopasowaniu do pola. Poniżej tej
+# granicy napis pozostaje geometrycznie w kratkach, ale jest już praktycznie
+# nieczytelny na wydruku; użytkownik powinien dostać wyraźne ostrzeżenie.
+MIN_EFFECTIVE_PT_PER_CHAR = 3.2
+
 # Kalibracja drukarki (mm) — przesunięcie wszystkich współrzędnych tekstu.
 _offset_x_mm: float = 0.0
 _offset_y_mm: float = 0.0
@@ -77,10 +82,38 @@ def find_font() -> Path:
 
 def _draw(page: fitz.Page, x: float, y: float, text: str,
           font: fitz.Font, fontsize: float, xscale: float = 1) -> None:
+    """Rysuje pojedynczy fragment; używane też przez patche w testach."""
     origin = fitz.Point(x, y)
     morph = (origin, fitz.Matrix(xscale, 0, 0, 1, 0, 0)) if abs(xscale - 1) > 0.00001 else None
     page.insert_text(origin, text, fontsize=fontsize, fontname="DrukiFormFont",
                      color=(0.03, 0.06, 0.12), morph=morph, overlay=True)
+
+
+class TextWriter:
+    """Zbiera znaki i zapisuje je w jednym przebiegu PDF.
+
+    PyMuPDF za każdym insert_text powtarwa pełną walidację czcionki. Przy
+    kilkuset znakach na stronę tę pracę wykonujemy raz, a nie per znak.
+    """
+
+    def __init__(self, page: fitz.Page, font: fitz.Font):
+        self.page = page
+        self.font = font
+        self.runs: list[tuple[str, float, float, float, float]] = []
+        self.cached_font = None
+        self.cashed_text = None
+        self.color = (0.03, 0.06, 0.12)
+
+    def add(self, x: float, y: float, text: str, fontsize: float, xscale: float = 1.0) -> None:
+        if not text:
+            return
+        self.runs.append((text, x, y, fontsize, xscale))
+
+    def write(self) -> None:
+        if not self.runs:
+            return
+        for text, x, y, fontsize, xscale in self.runs:
+            _draw(self.page, x, y, text, self.font, fontsize, xscale)
 
 
 def add_fitted_line(page: fitz.Page, font: fitz.Font, text: str,

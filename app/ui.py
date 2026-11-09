@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from .models import Payment, InvalidPayment, account_digits, valid_nrb, normalized_amount, payment_issues
 from .amount_words import amount_in_words
 from .pdfgen import generate_pdf, preview_png, PX_PT, SECTION_OFFSET_PX
-from .database import Database
+from .database import Database, DatabaseOpenError
 
 
 STYLE = """
@@ -117,12 +117,17 @@ class Window(QMainWindow):
         self._issue_labels = {}
         self._form_focus = None
         self._active_person = ""
+        self._dirty = False
+        self._loading = False
         self._fields: dict[str,QLineEdit|QPlainTextEdit] = {}
         self.setWindowTitle("Polecenie przelewu — wpłata / przelew")
         self._make_menu()
         self.resize(850, 540)
         self.setMinimumSize(760, 490)
         self._make_ui()
+        # Dane startowe nie są niezapisanymi zmianami użytkownika.
+        self._dirty = False
+        self._loading = False
         self.new_document()
         self.refresh_history()
         self.statusBar().clearMessage()
@@ -274,7 +279,7 @@ class Window(QMainWindow):
             return
         try:
             saved_backup = self.db.import_backup(Path(path))
-            self.new_document()
+            self.new_document(force=True)
             self.refresh_history()
             QMessageBox.information(self, "Kopia przywrócona", f"Przywrócono dane. Kopia poprzedniej bazy:\n{saved_backup}")
         except Exception as exc:
@@ -337,6 +342,7 @@ class Window(QMainWindow):
         header.addStretch()
         self.payment_types = self._segments(header, ("W · Wpłata gotówkowa", "P · Przelew"))
         self.payment_types.idToggled.connect(self._payment_type_toggled)
+        self.payment_types.idToggled.connect(lambda *_: self._mark_dirty())
         header.addStretch()
         self._button(header, "+ Nowy", self.new_document, style="quiet")
 
@@ -548,6 +554,8 @@ class Window(QMainWindow):
             button.setAccessibleName(text)
             button.setToolTip(text)
         self.amount_stars_box.toggled.connect(self._clear_error)
+        self.amount_stars_box.toggled.connect(self._mark_dirty)
+        self.amount_bar_box.toggled.connect(self._mark_dirty)
         amount.addLayout(amount_heading)
         amount_field = self._field("amount", "np. 1250,50")
         amount_field.setAccessibleName("Kwota (PLN)")
@@ -676,6 +684,7 @@ class Window(QMainWindow):
         field.setPlaceholderText(placeholder)
         if multi:
             field.setFixedHeight(58)
+            field.setTabChangesFocus(True)
         else:
             field.setMinimumHeight(34)
         if key in ("recipient_account", "payer_account", "amount"):
@@ -686,6 +695,7 @@ class Window(QMainWindow):
             field.setObjectName("note")
         field.textChanged.connect(self._clear_error)
         field.textChanged.connect(self._update_char_counts)
+        field.textChanged.connect(self._mark_dirty)
         field.installEventFilter(self)
         self._fields[key] = field
         if key == "amount":
@@ -961,6 +971,26 @@ class Window(QMainWindow):
                 lines = text.split("\n")
                 last = lines[-1] if lines else ""
                 self.title_char_count.setText(f"{len(last)}/27 zn.")
+
+    def _mark_dirty(self):
+        if not self._loading:
+            self._dirty = True
+
+    def _refresh_char_counts(self):
+        """Odśwież liczniki po programowym wczytaniu dokumentu."""
+        if hasattr(self, "recipient_char_count"):
+            value = max(len(self._fields["recipient"].text()),
+                        len(self._fields["recipient_address"].text()))
+            self.recipient_char_count.setText(f"{value}/27 zn.")
+        if hasattr(self, "payer_char_count"):
+            value = max(len(self._fields["payer"].text()),
+                        len(self._fields["payer_address"].text()))
+            self.payer_char_count.setText(f"{value}/27 zn.")
+        if hasattr(self, "title_char_count"):
+            lines = self._fields["title"].toPlainText().split("\n")
+            value = max((len(line) for line in lines), default=0)
+            self.title_char_count.setText(f"{value}/27 zn.")
+
     def _format_account(self, field):
         try:
             digits = account_digits(field.text())
@@ -1072,17 +1102,23 @@ class Window(QMainWindow):
         self._clear_error()
 
     def set_data(self, payment: Payment):
-        for key, widget in self._fields.items():
-            text = getattr(payment,key)
-            if isinstance(widget,QPlainTextEdit):
-                widget.setPlainText(text)
-            else:
-                widget.setText(text)
-        self.payment_types.button(int(payment.payment_type == "P")).setChecked(True)
-        self.amount_stars_box.setChecked(payment.amount_prefix_stars)
-        self.amount_bar_box.setChecked(payment.amount_end_bar)
-        self._on_payment_type_changed()
-        self._update_account_status()
+        self._loading = True
+        try:
+            for key, widget in self._fields.items():
+                text = getattr(payment,key)
+                if isinstance(widget,QPlainTextEdit):
+                    widget.setPlainText(text)
+                else:
+                    widget.setText(text)
+            self.payment_types.button(int(payment.payment_type == "P")).setChecked(True)
+            self.amount_stars_box.setChecked(payment.amount_prefix_stars)
+            self.amount_bar_box.setChecked(payment.amount_end_bar)
+            self._on_payment_type_changed()
+            self._update_account_status()
+        finally:
+            self._loading = False
+            self._dirty = False
+        self._refresh_char_counts()
 
     def _update_words(self):
         amount = self._fields["amount"].text()
@@ -1104,10 +1140,45 @@ class Window(QMainWindow):
                 self.history.setCurrentItem(item)
         self.history.blockSignals(False)
 
+    def _confirm_discard_changes(self) -> bool:
+        """Zwraca True, gdy można kontynuować bez utraty danych."""
+        if not self._dirty:
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Niezapisane zmiany",
+            "Masz niezapisane zmiany. Zapisać przed kontynuacją?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.save_document()
+            return not self._dirty
+        if reply == QMessageBox.StandardButton.No:
+            return True
+        return False
+
+    def _restore_history_selection(self, previous):
+        self.history.blockSignals(True)
+        target = None
+        if self.current_id is not None:
+            for row in range(self.history.count()):
+                candidate = self.history.item(row)
+                if candidate.data(Qt.ItemDataRole.UserRole) == self.current_id:
+                    target = candidate
+                    break
+        if target is None and previous is not None and self.history.row(previous) >= 0:
+            target = previous
+        self.history.setCurrentItem(target)
+        self.history.blockSignals(False)
+
     def open_history(self, item, _previous=None):
         if item is None:
             return
         payment_id = item.data(Qt.ItemDataRole.UserRole)
+        if not self._confirm_discard_changes():
+            self._restore_history_selection(_previous)
+            return
         try:
             self.set_data(self.db.get(payment_id))
             self.current_id = payment_id
@@ -1115,11 +1186,20 @@ class Window(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self,"Nie można wczytać",str(exc))
 
-    def new_document(self):
+    def new_document(self, force: bool = False):
+        if not force and not self._confirm_discard_changes():
+            return
         self.current_id = None
         self.set_data(Payment())
         if hasattr(self,"history"):
             self.history.setCurrentItem(None)
+        self._dirty = False
+        # Nowy dokument nie może zostawiać podglądu poprzednich danych.
+        if hasattr(self, "pages"):
+            self.pages.setCurrentWidget(self.form_page)
+        self._preview_pixmap = QPixmap()
+        if hasattr(self, "preview_label"):
+            self.preview_label.setPixmap(self._preview_pixmap)
         self.statusBar().showMessage("Nowy, niezapisany formularz.")
 
     def load_last_as_template(self):
@@ -1153,6 +1233,7 @@ class Window(QMainWindow):
     def duplicate_document(self):
         self.current_id = None
         self.history.setCurrentItem(None)
+        self._dirty = True
         self.statusBar().showMessage("Utworzono nowy formularz z dotychczasowymi danymi. Zapisz jako nowy wpis.")
 
     def validated(self) -> Payment | None:
@@ -1180,6 +1261,7 @@ class Window(QMainWindow):
         try:
             self.current_id = self.db.save(data,self.current_id)
             self.refresh_history()
+            self._dirty = False
             self.statusBar().showMessage(f"Zapisano formularz nr {self.current_id} w lokalnej bazie.")
         except Exception as exc:
             QMessageBox.critical(self,"Błąd zapisu",str(exc))
@@ -1246,11 +1328,14 @@ class Window(QMainWindow):
             except Exception as exc:
                 QMessageBox.critical(self, "Błąd usuwania", str(exc))
                 return
-            self.new_document()
+            self.new_document(force=True)
             self.refresh_history()
             self.statusBar().showMessage("Usunięto wpis z historii.")
 
     def closeEvent(self, event):
+        if not self._confirm_discard_changes():
+            event.ignore()
+            return
         self.db.close()
         super().closeEvent(event)
 
@@ -1288,9 +1373,33 @@ def run():
     new_folder = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
     legacy_folder = Path.home() / "Library" / "Application Support" / "Druki Pocztowe"
     folder = legacy_folder if legacy_folder.exists() else new_folder
-    db = Database(folder/"historia.sqlite3")
+    temporary_database = False
+    try:
+        db = Database(folder/"historia.sqlite3")
+    except DatabaseOpenError as exc:
+        reply = QMessageBox.question(
+            None,
+            "Baza danych niedostępna",
+            f"Nie można otworzyć bazy:\n{exc.path}\n\nBłąd: {exc.cause}\n\n"
+            "Istniejąca baza nie zostanie usunięta ani nadpisana. "
+            "Czy uruchomić aplikację z tymczasową bazą w pamięci? "
+            "Historia i odbiorcy nie będą zapisywani na dysku.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            raise SystemExit(1)
+        db = Database(":memory:")
+        temporary_database = True
     window = Window(db)
     window.show()
+    if temporary_database:
+        QMessageBox.warning(
+            window,
+            "Tymczasowa baza danych",
+            "Aplikacja działa z tymczasową bazą w pamięci. "
+            "Historia i odbiorcy nie będą zapisywani na dysku.",
+        )
     if sys.platform == "darwin" and app.platformName() == "cocoa":
         from .macos_menu import hide_services_menu
         QTimer.singleShot(0, hide_services_menu)
