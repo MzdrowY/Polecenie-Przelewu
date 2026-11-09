@@ -168,9 +168,9 @@ class CoreTests(unittest.TestCase):
             page = doc.new_page()
             with patch("app.pdfgen._draw") as draw:
                 add_cells(page, font, text, ACCOUNT_X, 240)
-        self.assertEqual(draw.call_count, 1)
-        self.assertEqual(draw.call_args.args[3], text)
-        self.assertGreater(draw.call_args.kwargs["xscale"], 0)
+        self.assertEqual(draw.call_count, len(text))
+        self.assertEqual(''.join(c.args[3] for c in draw.call_args_list), text)
+        self.assertTrue(all(0 < c.kwargs['xscale'] <= 1 for c in draw.call_args_list))
 
     def test_short_amount_words_rendered_on_both_receipts(self):
         payment = self.make_payment()
@@ -192,7 +192,8 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             pdf=generate_pdf(data,Path(tmp)/"cash.pdf")
             with fitz.open(pdf) as doc:
-                self.assertEqual(doc[0].get_text().replace("\xa0", " ").count(amount_in_words(data.amount).upper()),2)
+                text = ''.join(doc[0].get_text().split())
+                self.assertEqual(text.count(''.join(amount_in_words(data.amount).upper().split())), 2)
                 self.assertNotIn(data.payer_account,doc[0].get_text())
 
     def test_polish_characters_in_pdf(self):
@@ -283,12 +284,28 @@ class CoreTests(unittest.TestCase):
             page = doc.new_page()
             with patch("app.pdfgen._draw") as draw:
                 add_fitted_line(page, font, txt, ACCOUNT_X, 240, size=9.2)
-        self.assertEqual(draw.call_count, 1)
-        kwargs = draw.call_args.kwargs
-        # Gdy naturalny napis mieści się w polu: brak rozciągania (xscale == 1).
-        self.assertEqual(kwargs['xscale'], 1.0)
-        expected_right = draw.call_args.args[1] + font.text_length(txt, fontsize=9.2)
-        self.assertLessEqual(expected_right, ACCOUNT_X[-1] * PX_PT - 1)
+        calls = draw.call_args_list
+        self.assertEqual(''.join(c.args[3] for c in calls), txt.replace(' ', ''))
+        self.assertTrue(all(0 < c.kwargs['xscale'] <= 1 for c in calls))
+        step = ((ACCOUNT_X[-1] - ACCOUNT_X[0]) * PX_PT - 2) / len(txt)
+        self.assertLess(calls[0].args[1], ACCOUNT_X[0] * PX_PT + 1 + step)
+        last = calls[-1]
+        right = last.args[1] + font.text_length(last.args[3], fontsize=9.2) * last.kwargs['xscale']
+        self.assertGreater(right, ACCOUNT_X[-1] * PX_PT - 1 - step)
+        self.assertLessEqual(right, ACCOUNT_X[-1] * PX_PT - 1)
+
+    def test_500_words_fill_field_without_stretching_letters(self):
+        txt = amount_in_words('500,00').upper()
+        self.assertEqual(len(txt), 27)
+        font = fitz.Font(fontfile=str(find_font()))
+        with fitz.open() as doc:
+            page = doc.new_page()
+            with patch('app.pdfgen._draw') as draw:
+                add_cells(page, font, txt, ACCOUNT_X, 240, size=9.2)
+        calls = draw.call_args_list
+        self.assertEqual(''.join(c.args[3] for c in calls), txt.replace(' ', ''))
+        self.assertTrue(all(0 < c.kwargs['xscale'] <= 1 for c in calls))
+        self.assertGreater(calls[-1].args[1], ACCOUNT_X[-2] * 72 / 110)
 
     def test_extremely_long_words_shrink_to_right_edge(self):
         from app.pdfgen import add_fitted_line, PX_PT

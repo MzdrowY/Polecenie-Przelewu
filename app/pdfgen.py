@@ -88,8 +88,8 @@ def add_fitted_line(page: fitz.Page, font: fitz.Font, text: str,
                     size: float = 9.5) -> None:
     """Zapis ciągły po przekroczeniu liczby kratek.
 
-    Zużywa CAŁĄ dostępną szerokość: krótszy tekst rozciąga poziomo,
-    dłuższy ściska. Nie zmienia wysokości glifów i nie ucina końca.
+    Wykorzystuje całą szerokość pola. Jeżeli naturalny napis jest węższy,
+    rozkłada znaki równomiernie bez rozciągania liter; dłuższy napis ściska.
     """
     text = " ".join(text.upper().split())
     if not text:
@@ -102,9 +102,15 @@ def add_fitted_line(page: fitz.Page, font: fitz.Font, text: str,
         raise InvalidPayment("Nie można ustalić szerokości nadruku.")
     scale = (right - left) / width
     if scale > 1.0:
-        # Przy przekroczeniu kratek ściskamy, nigdy nie rozciągamy powyżej
-        # naturalnej wielkości glifów.
-        scale = 1.0
+        step = (right - left) / len(text)
+        for i, char in enumerate(text):
+            if char == " ":
+                continue
+            char_width = font.text_length(char, fontsize=size)
+            char_scale = min(1.0, step / char_width) if char_width else 1.0
+            x = left + i * step + (step - char_width * char_scale) / 2
+            _draw(page, x, y, char, font, size, xscale=char_scale)
+        return
     _draw(page, left, y, text, font, size, xscale=scale)
 
 
