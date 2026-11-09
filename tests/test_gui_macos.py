@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPageSize
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton, QDialog, QLabel
 
 from app.database import Database
 from app.pdfgen import ACCOUNT_X, PX_PT
@@ -174,9 +174,14 @@ class MacGuiTests(unittest.TestCase):
         self.assertEqual(self.window.shared_fields.currentIndex(), 0)
 
     def test_about_and_import_confirmation(self):
-        with patch.object(QMessageBox, 'about') as about:
+        messages = []
+        def capture_about():
+            dialog = self.window.findChild(QDialog, 'aboutDialog')
+            messages.extend(label.text() for label in dialog.findChildren(QLabel))
+            return 0
+        with patch.object(QDialog, 'exec', side_effect=capture_about):
             self.window._show_about()
-            message = about.call_args.args[2]
+            message = ' '.join(messages)
             for expected in ('0.12.1', 'Maciej Zdrowowicz', 'mzdrowy@gmail.com', 'MIT',
                              'https://github.com/MzdrowY/Polecenie-Przelewu'):
                 self.assertIn(expected, message)

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QButtonGroup, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QStackedWidget,
     QScrollArea, QListWidget, QListWidgetItem, QFileDialog, QMessageBox,
-    QFrame, QGraphicsDropShadowEffect, QDoubleSpinBox,
+    QFrame, QGraphicsDropShadowEffect, QDoubleSpinBox, QDialog, QLayout,
 )
 
 from .models import Payment, InvalidPayment, account_digits, valid_nrb, normalized_amount, payment_issues
@@ -170,14 +170,59 @@ class Window(QMainWindow):
 
     def _show_about(self):
         from app import __version__
-        QMessageBox.about(
-            self, "O programie",
-            f'<h3>Polecenie przelewu</h3><p>Wersja {__version__}</p>'
-            '<p>Wypełnianie i drukowanie blankietów wpłaty gotówkowej i polecenia przelewu.</p>'
-            '<p>Autor: Maciej Zdrowowicz<br>Kontakt: <a href="mailto:mzdrowy@gmail.com">mzdrowy@gmail.com</a><br>'
-            'Licencja: MIT<br><a href="https://github.com/MzdrowY/Polecenie-Przelewu">Repozytorium GitHub</a></p>'
-            '<p>Aplikacja nie jest podpisana certyfikatem Apple Developer.</p>',
-        )
+        dialog = QDialog(self)
+        dialog.setObjectName("aboutDialog")
+        dialog.setWindowTitle("O programie")
+        dialog.setStyleSheet("""
+            QDialog#aboutDialog { background: #f3f2ee; }
+            QDialog#aboutDialog QLabel { color: #252420; background: transparent; font-size: 13px; }
+            QDialog#aboutDialog QLabel#aboutTitle { font-size: 18px; font-weight: 700; }
+            QDialog#aboutDialog QLabel#aboutMuted { color: #68655e; font-size: 12px; }
+            QDialog#aboutDialog QPushButton { color: #252420; background: #ffffff;
+                border: 1px solid #d6d3cd; border-radius: 7px; padding: 6px 16px; }
+            QDialog#aboutDialog QPushButton:hover { background: #eae7df; }
+        """)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(22, 19, 22, 18)
+        layout.setSpacing(9)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        title = QLabel("Polecenie przelewu")
+        title.setObjectName("aboutTitle")
+        layout.addWidget(title)
+        version = QLabel(f"Wersja {__version__} · licencja MIT")
+        version.setObjectName("aboutMuted")
+        layout.addWidget(version)
+        layout.addSpacing(4)
+        description = QLabel("Wypełnianie i drukowanie blankietów\nwpłaty gotówkowej i polecenia przelewu.")
+        layout.addWidget(description)
+        layout.addSpacing(5)
+        details = QGridLayout()
+        details.setHorizontalSpacing(20)
+        details.setVerticalSpacing(6)
+        details.setColumnStretch(1, 1)
+        for row, (caption, value) in enumerate((
+                ("Autor", "Maciej Zdrowowicz"),
+                ("E-mail", '<a style="color:#315a78;" href="mailto:mzdrowy@gmail.com">mzdrowy@gmail.com</a>'),
+                ("Projekt", '<a style="color:#315a78;" href="https://github.com/MzdrowY/Polecenie-Przelewu">Repozytorium GitHub</a>'))):
+            label = QLabel(caption)
+            label.setObjectName("aboutMuted")
+            details.addWidget(label, row, 0)
+            value_label = QLabel(value)
+            value_label.setOpenExternalLinks(True)
+            value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            details.addWidget(value_label, row, 1)
+        layout.addLayout(details)
+        layout.addSpacing(3)
+        note = QLabel("Aplikacja nie jest podpisana certyfikatem Apple Developer.")
+        note.setObjectName("aboutMuted")
+        layout.addWidget(note)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        close = QPushButton("Zamknij")
+        close.clicked.connect(dialog.accept)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        dialog.exec()
 
     def export_backup(self):
         path, _ = QFileDialog.getSaveFileName(self, "Eksportuj kopię zapasową", str(Path.home() / "Documents" / "polecenie-przelewu-backup.json"), "JSON (*.json)")
