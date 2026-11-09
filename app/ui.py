@@ -172,7 +172,11 @@ class Window(QMainWindow):
         from app import __version__
         QMessageBox.about(
             self, "O programie",
-            f"Polecenie przelewu\nWersja {__version__}\n\nAplikacja desktopowa (PySide6 + PyMuPDF) do wypełniania i drukowania pocztowych blankietów wpłaty gotówkowej (W) i polecenia przelewu (P).\n\nNie jest podpisana certyfikatem Apple Developer.",
+            f'<h3>Polecenie przelewu</h3><p>Wersja {__version__}</p>'
+            '<p>Wypełnianie i drukowanie blankietów wpłaty gotówkowej i polecenia przelewu.</p>'
+            '<p>Autor: Maciej Zdrowowicz<br>Kontakt: <a href="mailto:mzdrowy@gmail.com">mzdrowy@gmail.com</a><br>'
+            'Licencja: MIT<br><a href="https://github.com/MzdrowY/Polecenie-Przelewu">Repozytorium GitHub</a></p>'
+            '<p>Aplikacja nie jest podpisana certyfikatem Apple Developer.</p>',
         )
 
     def export_backup(self):
@@ -189,10 +193,17 @@ class Window(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Importuj kopię zapasową", str(Path.home() / "Documents"), "JSON (*.json)")
         if not path:
             return
+        if QMessageBox.question(self, "Przywróć kopię zapasową",
+                "Import zastąpi całą obecną historię i książkę odbiorców. "
+                "Przed zmianą zostanie zachowana kopia obecnej bazy. Kontynuować?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
         try:
-            self.db.import_backup(Path(path))
+            saved_backup = self.db.import_backup(Path(path))
+            self.new_document()
             self.refresh_history()
-            self.statusBar().showMessage("Zaimportowano kopię zapasową: " + path)
+            QMessageBox.information(self, "Kopia przywrócona", f"Przywrócono dane. Kopia poprzedniej bazy:\n{saved_backup}")
         except Exception as exc:
             QMessageBox.critical(self, "Błąd importu", str(exc))
 
@@ -648,7 +659,7 @@ class Window(QMainWindow):
         layout.addWidget(self.preview_area, 1)
 
         footer = self._bar(layout, "actions")
-        self.print_mode_label = QLabel("Tryb: tylko tekst (na oryginał)")
+        self.print_mode_label = QLabel("Druk: pełny blankiet z danymi")
         self.print_mode_label.setObjectName("muted")
         footer.addWidget(self.print_mode_label)
         footer.addSpacing(8)

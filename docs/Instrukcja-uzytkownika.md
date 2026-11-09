@@ -1,36 +1,23 @@
-# Polecenie przelewu — instrukcja dla użytkownika
+# Polecenie przelewu — instrukcja użytkownika
 
-## Instalacja (macOS)
-1. Pobierz plik `Polecenie-przelewu.dmg` z GitHub Releases.
-2. Otwórz `.dmg` i przeciągnij „Polecenie przelewu.app” do folderu Programy (Aplikacje).
-3. Pierwsze uruchomienie: macOS Gatekeeper może zablokować aplikację (aplikacja nie jest podpisana certyfikatem Apple).
-   - Otwórz Ustawienia systemowe → Prywatność i bezpieczeństwo → zezwól na uruchomienie.
-   - Albo w Terminalu: `xattr -dr com.apple.quarantine "/Applications/Polecenie przelewu.app"`.
+## Instalacja i uruchomienie
 
-## Uruchomienie
-- Kliknij ikonę aplikacji. Okno główne zawiera formularz W (wpłata gotówkowa) / P (polecenie przelewu).
+Pobierz pakiet z [GitHub Releases](https://github.com/MzdrowY/Polecenie-Przelewu/releases). Na macOS otwórz DMG i przeciągnij aplikację do Programów. Aplikacja nie ma podpisu Apple Developer: jeśli system zablokuje pierwsze uruchomienie, zezwól na nie w Ustawieniach systemowych → Prywatność i bezpieczeństwo. Pakiet Windows wymaga sprawdzenia na Windows.
 
-## Wypełnianie formularza
-- Wpisz dane odbiorcy, numer rachunku (NRB/IBAN), kwotę (PLN), dane wpłacającego, tytuł.
-- Pola mają limity długości (zgodne z blankietem). Długie nazwy skróć.
-- Przełącznik „W / P” zmienia aktywne pola (rachunek zleceniodawcy tylko dla P).
+## Formularz i podgląd
 
-## Podgląd i druk
-- „Sprawdź wydruk →” pokazuje podgląd A4.
-- „Eksportuj PDF” zapisuje kompletny PDF z podkładem.
-- „Drukuj A4” drukuje na drukarce systemowej (sprawdź skalę 100%).
+Wybierz W (wpłata) albo P (przelew); dla przelewu podaj również rachunek zleceniodawcy. Wpisz numer rachunku odbiorcy, kwotę oraz pozostałe dane, po czym kliknij „Sprawdź wydruk →”. Program sprawdza numer rachunku i kwotę. Dłuższe napisy dopasowuje do dostępnej rubryki.
 
-## Historia i odbiorcy
-- „Zapisz w historii” zapisuje formularz lokalnie.
-- „Historia” pozwala wyszukiwać, otwierać, edytować, usuwać.
-- „Odbiorcy” — książka adresowa do szybkiego wstawiania danych.
+Podgląd pokazuje powiększony odcinek albo całą stronę. „Eksportuj PDF” zapisuje pełny blankiet z danymi; „Drukuj blankiet” przekazuje go do drukarki. Kalibracja X/Y przesuwa nadruk względem blankietu. Wybierz A4 i skalę 100%. Wydruk fizyczny i przyjęcie wzoru w placówce nie zostały potwierdzone — sprawdź wydruk próbny przed użyciem.
 
-## Dane i backup
-- Dane przechowywane lokalnie: `~/Library/Application Support/Polecenie przelewu/` (lub starszy folder `Druki Pocztowe`).
-- Plik `historia.sqlite3` — historia i odbiorcy. Zrób kopię tego pliku, aby zabezpieczyć dane.
-- Aplikacja nie synchronizuje danych z internetem.
+## Historia, odbiorcy i kopie
 
-## Rozwiązywanie problemów
-- **Brak polskich znaków w PDF:** ustaw zmienną `DRUKI_FONT` na ścieżkę do czcionki TTF/OTF z polskimi znakami.
-- **Marginesy drukarki:** sprawdź wydruk próbny w skali 100% przed użyciem w placówce.
-- **Błąd zapisu historii:** sprawdź uprawnienia do folderu danych.
+„Zapisz w historii” zapisuje formularz na tym komputerze. Przycisk „Historia” pozwala go ponownie otworzyć, edytować lub powielić, a „Odbiorcy” otwiera lokalną książkę odbiorców.
+
+W menu Plik możesz wyeksportować kopię historii i odbiorców do JSON. Plik zawiera dane osobowe i rachunki: przechowuj go w bezpiecznym miejscu. Import zastępuje obecną historię i odbiorców po potwierdzeniu; przed przywróceniem program zapisuje kopię dotychczasowej bazy i pokazuje jej ścieżkę. Baza na macOS znajduje się w katalogu danych aplikacji, w starszych instalacjach w `~/Library/Application Support/Druki Pocztowe/`.
+
+Dane nie są synchronizowane z internetem. Opcja „Sprawdź aktualizacje” w menu Pomoc łączy się z GitHubem po jej wybraniu.
+
+## Informacje i pomoc
+
+Autor: Maciej Zdrowowicz, [mzdrowy@gmail.com](mailto:mzdrowy@gmail.com). Repozytorium: [GitHub](https://github.com/MzdrowY/Polecenie-Przelewu). Licencja MIT. Wersję oraz dane autora znajdziesz również w menu Pomoc → O programie.

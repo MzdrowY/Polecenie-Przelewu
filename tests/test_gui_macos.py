@@ -173,6 +173,30 @@ class MacGuiTests(unittest.TestCase):
         self.assertFalse(self.window.payer_account_field.isEnabled())
         self.assertEqual(self.window.shared_fields.currentIndex(), 0)
 
+    def test_about_and_import_confirmation(self):
+        with patch.object(QMessageBox, 'about') as about:
+            self.window._show_about()
+            message = about.call_args.args[2]
+            for expected in ('0.12.1', 'Maciej Zdrowowicz', 'mzdrowy@gmail.com', 'MIT',
+                             'https://github.com/MzdrowY/Polecenie-Przelewu'):
+                self.assertIn(expected, message)
+        self.fill()
+        self.click('Zapisz w historii')
+        ident = self.window.current_id
+        backup = self.root / 'backup.json'
+        self.db.export_backup(backup)
+        with patch.object(QFileDialog, 'getOpenFileName', return_value=(str(backup), 'JSON')):
+            with patch.object(QMessageBox, 'question', return_value=QMessageBox.StandardButton.No):
+                self.window.import_backup()
+        self.assertEqual(self.window.current_id, ident)
+        with patch.object(QFileDialog, 'getOpenFileName', return_value=(str(backup), 'JSON')):
+            with patch.object(QMessageBox, 'question', return_value=QMessageBox.StandardButton.Yes):
+                with patch.object(QMessageBox, 'information') as info:
+                    self.window.import_backup()
+        self.assertIsNone(self.window.current_id)
+        self.assertEqual(len(self.db.all()), 1)
+        self.assertIn('historia-przed-importem-', info.call_args.args[2])
+
     def test_print_to_pdf_through_button(self):
         self.fill()
         path = self.root / "print.pdf"

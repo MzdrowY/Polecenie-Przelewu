@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import sqlite3
+import tempfile
+import os
 from .models import Payment, account_digits, valid_nrb
 
 
@@ -148,9 +150,48 @@ class Database:
         }
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def import_backup(self, path: str | Path) -> None:
+    def import_backup(self, path: str | Path) -> Path:
         path = Path(path)
         data = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
+                or data["schema_version"] != SCHEMA_VERSION
+                or not isinstance(data.get("payments"), list)
+                or not isinstance(data.get("recipients"), list)):
+            raise ValueError("Nieprawidłowy lub nieobsługiwany format kopii zapasowej.")
+        payment_keys = ("id", "created_at", "updated_at", "recipient", "recipient_account", "amount", "data_json")
+        recipient_keys = ("name_key", "account", "name", "address")
+        for row in data["payments"]:
+            if (not isinstance(row, dict) or any(k not in row for k in payment_keys)
+                    or type(row["id"]) is not int or row["id"] <= 0
+                    or any(not isinstance(row[k], str) for k in payment_keys[1:])):
+                raise ValueError("Nieprawidłowy wpis historii w kopii zapasowej.")
+            try:
+                fields = json.loads(row["data_json"])
+                if not isinstance(fields, dict):
+                    raise ValueError("Nieprawidłowe dane formularza.")
+                payment = Payment(**fields)
+                if any(not isinstance(getattr(payment, key), str) for key in (
+                        "recipient", "recipient_address", "recipient_account", "amount", "currency",
+                        "payer_account", "payer", "payer_address", "title", "note", "payment_type")):
+                    raise ValueError("Nieprawidłowe pola formularza.")
+                if any(type(getattr(payment, key)) is not bool for key in (
+                        "mark_wp", "amount_prefix_stars", "amount_end_bar")):
+                    raise ValueError("Nieprawidłowe opcje formularza.")
+                if (row["recipient"] != payment.recipient.strip()
+                        or row["recipient_account"] != payment.recipient_account.strip()
+                        or row["amount"] != payment.amount.strip()):
+                    raise ValueError("Niespójne dane formularza.")
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Nieprawidłowy formularz w kopii zapasowej.") from exc
+        for row in data["recipients"]:
+            if (not isinstance(row, dict) or any(not isinstance(row.get(k), str) for k in recipient_keys)):
+                raise ValueError("Nieprawidłowy odbiorca w kopii zapasowej.")
+
+        fd, backup_name = tempfile.mkstemp(prefix="historia-przed-importem-", suffix=".sqlite3", dir=self.path.parent)
+        os.close(fd)
+        backup_path = Path(backup_name)
+        with sqlite3.connect(backup_path) as backup:
+            self.conn.backup(backup)
         with self.conn:
             self.conn.execute("DELETE FROM payments")
             self.conn.execute("DELETE FROM recipients")
@@ -167,6 +208,7 @@ class Database:
                     (row["name_key"], row["account"], row["name"], row["address"]),
                 )
         self.run_migrations()
+        return backup_path
 
     def close(self):
         self.conn.close()

@@ -77,7 +77,7 @@ def find_font() -> Path:
 
 def _draw(page: fitz.Page, x: float, y: float, text: str,
           font: fitz.Font, fontsize: float, xscale: float = 1) -> None:
-    origin = fitz.Point(x + _ox(), y + _oy())
+    origin = fitz.Point(x, y)
     morph = (origin, fitz.Matrix(xscale, 0, 0, 1, 0, 0)) if abs(xscale - 1) > 0.00001 else None
     page.insert_text(origin, text, fontsize=fontsize, fontname="DrukiFormFont",
                      color=(0.03, 0.06, 0.12), morph=morph, overlay=True)
