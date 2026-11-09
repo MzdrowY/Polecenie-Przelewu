@@ -50,8 +50,6 @@ QLineEdit, QPlainTextEdit {
     placeholder-text-color: #77736c;
 }
 QLineEdit:focus, QPlainTextEdit:focus { background: #ffffff; border: 1.5px solid #18181b; }
-QPlainTextEdit#note { background: #faf9f6; border: 1px dashed #d6d3cd; }
-QPlainTextEdit#note:focus { background: #ffffff; border: 1.5px solid #18181b; }
 QLineEdit[invalid="true"], QPlainTextEdit[invalid="true"] { background: #fcecea; border: 1.5px solid #DC2626; }
 QLineEdit#account { font-size: 20px; font-weight: 700; }
 QLineEdit#amount { font-size: 22px; font-weight: 700; }
