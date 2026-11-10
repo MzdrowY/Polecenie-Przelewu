@@ -547,8 +547,6 @@ class Window(QMainWindow):
         for previous, following in zip(order, order[1:]):
             QWidget.setTabOrder(previous, following)
         # Przyciski pomocnicze nie zabierają focusu przy Tab.
-        self.amount_stars_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.amount_bar_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         if hasattr(self, "_remember_recipient_button"):
             self._remember_recipient_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
@@ -677,16 +675,6 @@ class Window(QMainWindow):
         amount_heading.addWidget(amount_label)
         amount_heading.addStretch()
         amount_heading.setSpacing(8)
-        self.amount_stars_box = self._button(amount_heading, "* Gwiazdki", style="chip")
-        self.amount_bar_box = self._button(amount_heading, "‒ Myślniki", style="chip")
-        for button, text in ((self.amount_stars_box, "Gwiazdki przed kwotą"),
-                             (self.amount_bar_box, "Myślniki w wolnych kratkach po kwocie")):
-            button.setCheckable(True)
-            button.setAccessibleName(text)
-            button.setToolTip(text)
-        self.amount_stars_box.toggled.connect(self._clear_error)
-        self.amount_stars_box.toggled.connect(self._mark_dirty)
-        self.amount_bar_box.toggled.connect(self._mark_dirty)
         amount.addLayout(amount_heading)
         amount_field = self._field("amount", "np. 1250,50")
         amount_field.setAccessibleName("Kwota (PLN)")
@@ -1367,8 +1355,6 @@ class Window(QMainWindow):
         for key in ("recipient_address", "payer_address"):
             data[key] = normalized_address(data[key])
         data["payment_type"] = "P" if self.payment_types.checkedId() == 1 else "W"
-        data["amount_prefix_stars"] = self.amount_stars_box.isChecked()
-        data["amount_end_bar"] = self.amount_bar_box.isChecked()
         return Payment(**data)
 
     def _payment_type_toggled(self, _id, checked):
@@ -1402,8 +1388,6 @@ class Window(QMainWindow):
                 else:
                     widget.setText(text)
             self.payment_types.button(int(payment.payment_type == "P")).setChecked(True)
-            self.amount_stars_box.setChecked(payment.amount_prefix_stars)
-            self.amount_bar_box.setChecked(payment.amount_end_bar)
             self._on_payment_type_changed()
             self._update_account_status()
         finally:

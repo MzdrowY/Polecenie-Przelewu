@@ -33,6 +33,7 @@ Kod jest w `app/`, oryginalny blankiet w `assets/template.pdf`, testy w `tests/`
 
 ## Wersja
 
+v0.13.5 — myślniki w wolnych kratkach po kwocie zawsze automatycznie; usunięte opcje gwiazdek i kreski.
 v0.13.4 — myślniki w wolnych kratkach po kwocie zamiast jednej linii.
 v0.13.3 — menu kontekstowe w jasnym stylu aplikacji.
 v0.13.2 — przycisk zamykania panelu historii.

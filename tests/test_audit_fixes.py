@@ -223,11 +223,12 @@ class AuditGuiRegressionTests(unittest.TestCase):
         self.assertEqual(title.toPlainText(), "Tytuł testowy")
         self.assertIs(self.window.focusWidget(), note)
 
-    def test_payment_options_mark_form_dirty(self):
+    def test_payment_type_marks_form_dirty(self):
         self.window.payment_types.button(1).setChecked(True)
         self.assertTrue(self.window._dirty)
         self.window.new_document(force=True)
-        self.window.amount_stars_box.setChecked(True)
+        self.assertFalse(self.window._dirty)
+        self.window.payment_types.button(1).setChecked(True)
         self.assertTrue(self.window._dirty)
 
 

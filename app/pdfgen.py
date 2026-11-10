@@ -6,7 +6,7 @@ import sys
 import tempfile
 from unicodedata import normalize
 import pymupdf as fitz
-from .models import AMOUNT_PREFIX, Payment, InvalidPayment, check, account_digits, fit_rows, normalized_amount, normalized_address
+from .models import Payment, InvalidPayment, check, account_digits, fit_rows, normalized_amount, normalized_address
 from .amount_words import amount_in_words
 
 REFERENCE_DPI = 110
@@ -299,7 +299,7 @@ def _render_pdf(data: Payment, target: str | Path, *, draft: bool = False) -> Pa
         amount = field(normalized_amount, "", data.amount) if data.amount.strip() else ""
         words = amount_in_words(amount) if amount else ""
         payer_account = field(account, "", data.payer_account) if data.payment_type == "P" else ""
-        numeric_amount = (AMOUNT_PREFIX if data.amount_prefix_stars else "") + amount if amount else ""
+        numeric_amount = amount
         if draft and len(numeric_amount) >= len(AMOUNT_X):
             numeric_amount = ""
         writer = ShapeWriter(page, font)
@@ -310,8 +310,7 @@ def _render_pdf(data: Payment, target: str | Path, *, draft: bool = False) -> Pa
             field(add_cells, None, page, font, data.currency.strip(), CURRENCY_X, LINES_Y["currency"], offset, size=9, writer=writer)
             # Standardowy zapis kwoty od lewej, bez rozciągania cyfr.
             field(add_cells, None, page, font, numeric_amount, AMOUNT_X, LINES_Y["amount"], offset, right=False, writer=writer)
-            if data.amount_end_bar:
-                draw_amount_tail_dashes(page, len(numeric_amount), offset)
+            draw_amount_tail_dashes(page, len(numeric_amount), offset)
             # Kwota słownie traktowana jak pole kratkowe: każda litera w kratce,
             # a ścisnięcie dopiero po przekroczeniu liczby kratek.
             if data.payment_type == "W":

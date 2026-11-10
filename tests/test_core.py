@@ -47,16 +47,6 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(valid_nrb(arabic))
         self.assertEqual(account_digits(arabic), account)
 
-    def test_amount_with_stars_must_fit_its_cells(self):
-        data = self.make_payment()
-        data.amount = "9999999,99"
-        data.amount_prefix_stars = True
-        self.assertEqual(check(data), [])
-        data.amount = "10000000,00"
-        self.assertTrue(any("gwiazdkami" in err for err in check(data)))
-        data.amount_prefix_stars = False
-        self.assertEqual(check(data), [])
-
     def test_pdf_rejects_unprintable_glyph(self):
         data = self.make_payment()
         data.title = "TEST \U0010FFFF"
@@ -349,13 +339,13 @@ class CoreTests(unittest.TestCase):
                 self.assertGreater(texts.count("T"),5)
                 self.assertTrue(output.stat().st_size>10000)
 
-    def test_amount_is_left_aligned_with_optional_two_asterisks(self):
+    def test_amount_is_left_aligned_without_asterisks(self):
         data = self.make_payment()
-        data.amount_prefix_stars = True
+        data.amount_prefix_stars = True  # pole historyczne — musi być ignorowane
         with tempfile.TemporaryDirectory() as tmp:
             with patch("app.pdfgen.add_cells", wraps=add_cells) as draw:
                 generate_pdf(data, Path(tmp)/"kwota_od_lewej.pdf")
-        calls = [c for c in draw.call_args_list if c.args[2] == "**120,20" and c.args[3] == AMOUNT_X]
+        calls = [c for c in draw.call_args_list if c.args[2] == "120,20" and c.args[3] == AMOUNT_X]
         self.assertEqual(len(calls), 2)
         self.assertTrue(all(c.kwargs.get("right", False) is False for c in calls))
 
@@ -486,20 +476,19 @@ class CoreTests(unittest.TestCase):
             if a+b in ['JE','ED','DE','EN','ZŁ','ŁO','OT','TY','GR','RO','OS','SZ']:
                 self.assertEqual(j,i+1)
 
-    def test_number_tail_marks_are_optional_and_on_two_receipts(self):
+    def test_number_tail_dashes_are_printed_on_two_receipts(self):
         from app.pdfgen import draw_amount_tail_dashes
         p=self.make_payment()
-        p.amount_end_bar=True
         with tempfile.TemporaryDirectory() as tmp:
             with patch('app.pdfgen.draw_amount_tail_dashes') as tail:
                 generate_pdf(p, Path(tmp)/'security.pdf')
         self.assertEqual(tail.call_count,2)
         self.assertTrue(all(call.args[1] == len('120,20') for call in tail.call_args_list))
-        p.amount_end_bar=False
+        p.amount_end_bar=False  # pole historyczne — bez wpływu
         with tempfile.TemporaryDirectory() as tmp:
             with patch('app.pdfgen.draw_amount_tail_dashes') as tail:
-                generate_pdf(p, Path(tmp)/'no_security.pdf')
-        self.assertEqual(tail.call_count,0)
+                generate_pdf(p, Path(tmp)/'legacy_flag.pdf')
+        self.assertEqual(tail.call_count,2)
 
     def test_amount_tail_prints_dash_in_every_empty_cell(self):
         import pymupdf as fitz
@@ -519,15 +508,6 @@ class CoreTests(unittest.TestCase):
         empty_page = empty.new_page(width=595, height=842)
         draw_amount_tail_dashes(empty_page, len(AMOUNT_X) - 1)
         self.assertEqual(empty_page.get_drawings(), [])
-
-    def test_stars_optional_off_by_default(self):
-        p=self.make_payment()
-        self.assertFalse(p.amount_prefix_stars)
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch('app.pdfgen.add_cells', wraps=add_cells) as draw:
-                generate_pdf(p, Path(tmp)/'without_stars.pdf')
-        amount_calls=[call for call in draw.call_args_list if call.args[3]==AMOUNT_X]
-        self.assertEqual([call.args[2] for call in amount_calls],['120,20','120,20'])
 
     def test_old_database_json_loads_as_cash(self):
         import json

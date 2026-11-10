@@ -21,15 +21,14 @@ class Payment:
     note: str = ""
     payment_type: str = "W"  # W=wpłata gotówkowa; P=polecenie przelewu
     mark_wp: bool = True  # pole zachowane dla zgodności z historią, nadruk wynika z typu W/P
-    amount_prefix_stars: bool = False  # niepotwierdzony wymóg dla zwykłego druku; opcjonalne ** z instrukcji podatkowych
-    amount_end_bar: bool = True  # niestandardowe wizualne zabezpieczenie wolnego miejsca po kwocie
+    amount_prefix_stars: bool = False  # pole historyczne — funkcja gwiazdek usunięta
+    amount_end_bar: bool = True  # pole historyczne — myślniki są teraz zawsze
 
     def as_dict(self):
         return asdict(self)
 
 
 AMOUNT_CELLS = 12
-AMOUNT_PREFIX = "**"
 
 
 class InvalidPayment(ValueError):
@@ -133,9 +132,7 @@ def payment_issues(payment: Payment, strict: bool = True) -> list[tuple[str, str
         errors.append(("amount", "Uzupełnij kwotę."))
     elif payment.amount.strip():
         try:
-            amount = normalized_amount(payment.amount)
-            if payment.amount_prefix_stars and len(AMOUNT_PREFIX + amount) > AMOUNT_CELLS:
-                errors.append(("amount", "Kwota z gwiazdkami nie mieści się w 12 kratkach. Wyłącz gwiazdki."))
+            normalized_amount(payment.amount)
         except InvalidPayment as exc:
             errors.append(("amount", str(exc)))
     if payment.currency.strip().upper() != "PLN":
