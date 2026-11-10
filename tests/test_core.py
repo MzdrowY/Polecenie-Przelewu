@@ -6,10 +6,13 @@ from unittest.mock import patch
 import pymupdf as fitz
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from app.models import Payment, valid_nrb, normalized_amount, split_grid, fit_rows, check, InvalidPayment
+from app.models import Payment, valid_nrb, normalized_amount, normalized_address, split_grid, fit_rows, check, InvalidPayment
 from app.amount_words import number_words, amount_in_words
 from app.database import Database
-from app.pdfgen import generate_pdf, template_path, add_cells, ACCOUNT_X, AMOUNT_X, find_font
+from app.pdfgen import (
+    generate_pdf, template_path, add_cells, ACCOUNT_X, AMOUNT_X, find_font,
+    GRID_X, LINES_Y, BASELINE_SHIFT_PX, SECTION_OFFSET_PX, PX_PT,
+)
 
 
 def valid_test_account(bban="109000000000000000000001"):
@@ -91,12 +94,137 @@ class CoreTests(unittest.TestCase):
             pdf=generate_pdf(data,Path(tmp)/"dlugie.pdf")
             with fitz.open(pdf) as doc:
                 compact = "".join(doc[0].get_text().replace("\xa0", "").split())
-                # Nazwa odbiorcy dzieli się na dwa wiersze po 27 kratek;
-                # każdy wiersz występuje na obu odcinkach blankietu.
-                rows = fit_rows(data.recipient, rows=2)
-                for row in rows:
-                    self.assertGreaterEqual(compact.count("".join(row.split())), 2)
+                self.assertEqual(compact.count("".join((data.recipient + data.recipient_address).split())), 2)
                 self.assertIn("D\u0141UGAPRZYK\u0141ADOWA", compact)
+
+    def test_names_and_full_addresses_share_two_rows_on_each_receipt(self):
+        data = self.make_payment()
+        data.recipient = "Spółdzielnia Mieszkaniowa imienia Tadeusza Kościuszki\nOddział Zachodni"
+        data.recipient_address = "ulica Powstańców Wielkopolskich 120, budynek B,\n12-345 Łódź"
+        data.payer = "Przedsiębiorstwo Usług Komunalnych i Transportu Spółka Akcyjna"
+        data.payer_address = "aleja Niepodległości 123, klatka C, lokal 14, 20-001 Lublin"
+        self.assertEqual(check(data), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generate_pdf(data, Path(tmp) / "pelne-adresy.pdf")
+            with fitz.open(pdf) as doc:
+                page = doc[0]
+                for offset in (0, SECTION_OFFSET_PX):
+                    for key in ("recipient", "payer"):
+                        rows = []
+                        for baseline in LINES_Y[key]:
+                            y = (baseline + offset + BASELINE_SHIFT_PX) * PX_PT
+                            clip = fitz.Rect(GRID_X[0] * PX_PT, y - 15, GRID_X[-1] * PX_PT, y + 6)
+                            rows.append("".join(page.get_text(clip=clip).replace("\xad", "-").split()))
+                        name = getattr(data, key)
+                        address = getattr(data, key + "_address")
+                        self.assertTrue(all(rows))
+                        self.assertEqual("".join(rows), "".join((name + address).upper().split()))
+
+    def test_person_name_and_address_use_separate_rows_when_both_fit(self):
+        data = self.make_payment()
+        data.recipient = "Jan Kowalski"
+        data.recipient_address = "ul. Polna 1"
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generate_pdf(data, Path(tmp) / "dwa-wiersze.pdf")
+            with fitz.open(pdf) as doc:
+                page = doc[0]
+                rows = []
+                for baseline in LINES_Y["recipient"]:
+                    y = (baseline + BASELINE_SHIFT_PX) * PX_PT
+                    clip = fitz.Rect(GRID_X[0] * PX_PT, y - 15, GRID_X[-1] * PX_PT, y + 6)
+                    rows.append("".join(page.get_text(clip=clip).replace("\xad", "-").split()))
+        self.assertEqual(rows, ["JANKOWALSKI", "UL.POLNA1"])
+
+    def test_person_rows_stay_separate_when_combined_text_exceeds_one_row(self):
+        data = self.make_payment()
+        data.recipient = "Spółdzielnia Mieszkaniowa"
+        data.recipient_address = "ul. Polna 12, 00-001 Łódź"
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generate_pdf(data, Path(tmp) / "jedno-pole.pdf")
+            with fitz.open(pdf) as doc:
+                page = doc[0]
+                rows = []
+                for baseline in LINES_Y["recipient"]:
+                    y = (baseline + BASELINE_SHIFT_PX) * PX_PT
+                    clip = fitz.Rect(GRID_X[0] * PX_PT, y - 15, GRID_X[-1] * PX_PT, y + 6)
+                    rows.append("".join(page.get_text(clip=clip).replace("\xad", "-").split()))
+        self.assertEqual(rows, ["SPÓŁDZIELNIAMIESZKANIOWA", "UL.POLNA12,00-001ŁÓDŹ"])
+
+    def test_manual_split_is_respected_when_address_is_slightly_too_long(self):
+        data = self.make_payment()
+        data.recipient = "Franek Kimono"
+        data.recipient_address = "ul. Polna 1, 00-001 Warszawa"
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generate_pdf(data, Path(tmp) / "reczny-podzial.pdf")
+            with fitz.open(pdf) as doc:
+                page = doc[0]
+                rows = []
+                for baseline in LINES_Y["recipient"]:
+                    y = (baseline + BASELINE_SHIFT_PX) * PX_PT
+                    clip = fitz.Rect(GRID_X[0] * PX_PT, y - 15, GRID_X[-1] * PX_PT, y + 6)
+                    rows.append("".join(page.get_text(clip=clip).replace("\xad", "-").split()))
+        self.assertEqual(rows, ["FRANEKKIMONO", "UL.POLNA1,00-001WARSZAWA"])
+
+    def test_whole_person_text_in_first_field_is_split_automatically(self):
+        data = self.make_payment()
+        data.recipient = "Franek Kimono ul. Przykładowa 12, 00-001 Warszawa"
+        data.recipient_address = ""
+        combined = " ".join(data.recipient.upper().split())
+        capacity = len(GRID_X) - 1
+        expected = [combined[:capacity], combined[capacity:]]
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generate_pdf(data, Path(tmp) / "calosc-w-pierwszym.pdf")
+            with fitz.open(pdf) as doc:
+                page = doc[0]
+                rows = []
+                for baseline in LINES_Y["recipient"]:
+                    y = (baseline + BASELINE_SHIFT_PX) * PX_PT
+                    clip = fitz.Rect(GRID_X[0] * PX_PT, y - 15, GRID_X[-1] * PX_PT, y + 6)
+                    rows.append("".join(page.get_text(clip=clip).replace("\xad", "-").split()))
+        self.assertEqual(rows, ["".join(line.split()) for line in expected])
+
+    def test_auto_split_continues_mid_postal_code_without_gap(self):
+        data = self.make_payment()
+        data.recipient = "ENEAS.A., ul. Górecka 1, 60-201 Poznań"
+        data.recipient_address = ""
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generate_pdf(data, Path(tmp) / "kod-pocztowy.pdf")
+            with fitz.open(pdf) as doc:
+                page = doc[0]
+                for offset in (0, SECTION_OFFSET_PX):
+                    rows = []
+                    for baseline in LINES_Y["recipient"]:
+                        y = (baseline + offset + BASELINE_SHIFT_PX) * PX_PT
+                        clip = fitz.Rect(GRID_X[0] * PX_PT, y - 15, GRID_X[-1] * PX_PT, y + 6)
+                        rows.append("".join(page.get_text(clip=clip).replace("\xad", "-").split()))
+                    self.assertEqual(rows, ["ENEAS.A.,UL.GÓRECKA1,60", "-201POZNAŃ"])
+
+    def test_long_person_block_is_complete_on_both_receipts(self):
+        data = self.make_payment()
+        data.recipient = "ODBIORCA " + "X" * 300
+        data.recipient_address = "ULICA PRZYKŁADOWA 12, 00-001 WARSZAWA"
+        expected = "".join((data.recipient + data.recipient_address).upper().split())
+        self.assertEqual(check(data), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generate_pdf(data, Path(tmp) / "dlugi-odbiorca.pdf")
+            with fitz.open(pdf) as doc:
+                compact = "".join(doc[0].get_text().replace("\xad", "-").split())
+        self.assertEqual(compact.count(expected), 2)
+
+    def test_wrapped_addresses_fit_on_both_receipts(self):
+        data = self.make_payment()
+        data.recipient_address = "Próbna 1, 1\r\n2-345 Łódź"
+        data.payer_address = "Testowa 2\u2028 20-001 Lublin"
+        self.assertEqual(normalized_address(data.recipient_address), "Próbna 1, 12-345 Łódź")
+        self.assertEqual(normalized_address("Próbna 1, 1 2-345 Łódź"), "Próbna 1, 12-345 Łódź")
+        self.assertEqual(normalized_address(data.payer_address), "Testowa 2 20-001 Lublin")
+        self.assertEqual(check(data), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = generate_pdf(data, Path(tmp) / "adresy.pdf")
+            with fitz.open(pdf) as doc:
+                compact = "".join(doc[0].get_text().replace("\xad", "-").split())
+                self.assertEqual(compact.count("PRÓBNA1,12-345ŁÓDŹ"), 2)
+                self.assertEqual(compact.count("TESTOWA220-001LUBLIN"), 2)
 
     def test_amount_in_words_polish_inflection(self):
         examples={
@@ -358,20 +486,39 @@ class CoreTests(unittest.TestCase):
             if a+b in ['JE','ED','DE','EN','ZŁ','ŁO','OT','TY','GR','RO','OS','SZ']:
                 self.assertEqual(j,i+1)
 
-    def test_number_tail_line_is_optional_and_on_two_receipts(self):
-        from app.pdfgen import draw_amount_tail_bar
+    def test_number_tail_marks_are_optional_and_on_two_receipts(self):
+        from app.pdfgen import draw_amount_tail_dashes
         p=self.make_payment()
         p.amount_end_bar=True
         with tempfile.TemporaryDirectory() as tmp:
-            with patch('app.pdfgen.draw_amount_tail_bar') as tail:
+            with patch('app.pdfgen.draw_amount_tail_dashes') as tail:
                 generate_pdf(p, Path(tmp)/'security.pdf')
         self.assertEqual(tail.call_count,2)
         self.assertTrue(all(call.args[1] == len('120,20') for call in tail.call_args_list))
         p.amount_end_bar=False
         with tempfile.TemporaryDirectory() as tmp:
-            with patch('app.pdfgen.draw_amount_tail_bar') as tail:
+            with patch('app.pdfgen.draw_amount_tail_dashes') as tail:
                 generate_pdf(p, Path(tmp)/'no_security.pdf')
         self.assertEqual(tail.call_count,0)
+
+    def test_amount_tail_prints_dash_in_every_empty_cell(self):
+        import pymupdf as fitz
+        from app.pdfgen import AMOUNT_X, PX_PT, draw_amount_tail_dashes
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        draw_amount_tail_dashes(page, 6)
+        rects = [d["rect"] for d in page.get_drawings()]
+        self.assertEqual(len(rects), len(AMOUNT_X) - 1 - 6)
+        cell_width = (AMOUNT_X[1] - AMOUNT_X[0]) * PX_PT
+        for rect in rects:
+            self.assertLess(rect.width, cell_width)
+            self.assertGreater(rect.width, 3)
+        for left, right in zip(rects, rects[1:]):
+            self.assertGreater(right.x0, left.x1)
+        empty = fitz.open()
+        empty_page = empty.new_page(width=595, height=842)
+        draw_amount_tail_dashes(empty_page, len(AMOUNT_X) - 1)
+        self.assertEqual(empty_page.get_drawings(), [])
 
     def test_stars_optional_off_by_default(self):
         p=self.make_payment()

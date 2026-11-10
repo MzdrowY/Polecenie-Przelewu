@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from app import __version__
 
 a = Analysis(
     ['main.py'],
@@ -47,4 +48,8 @@ app = BUNDLE(
     name='Polecenie przelewu.app',
     icon='assets/icon.icns',
     bundle_identifier='pl.polecenieprzelewu.desktop',
+    info_plist={
+        'CFBundleShortVersionString': __version__,
+        'CFBundleVersion': __version__,
+    },
 )

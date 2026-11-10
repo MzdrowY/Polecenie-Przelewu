@@ -4,18 +4,20 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from unicodedata import normalize
 import pymupdf as fitz
-from .models import AMOUNT_PREFIX, Payment, InvalidPayment, check, account_digits, fit_rows, normalized_amount
+from .models import AMOUNT_PREFIX, Payment, InvalidPayment, check, account_digits, fit_rows, normalized_amount, normalized_address
 from .amount_words import amount_in_words
 
 REFERENCE_DPI = 110
 PX_PT = 72 / REFERENCE_DPI
 MM_PT = 72 / 25.4
 
-# Minimalny efektywny rozmiar litery po dopasowaniu do pola. Poniżej tej
-# granicy napis pozostaje geometrycznie w kratkach, ale jest już praktycznie
-# nieczytelny na wydruku; użytkownik powinien dostać wyraźne ostrzeżenie.
-MIN_EFFECTIVE_PT_PER_CHAR = 3.2
+# Minimalny efektywny rozmiar litery po dopasowaniu do szerokości pola.
+# Poniżej tej granicy napis fizycznie mieści się w wierszu, ale jest już
+# praktycznie nieczytelny na wydruku. Przy kroju 9,5 pt i polu 27 kratek
+# odpowiada to ok. 150 znakom w jednym wierszu; krótsze wiersze przechodzą.
+MIN_EFFECTIVE_PT_PER_CHAR = 4.5
 
 # Kalibracja drukarki (mm) — przesunięcie wszystkich współrzędnych tekstu.
 _offset_x_mm: float = 0.0
@@ -89,36 +91,39 @@ def _draw(page: fitz.Page, x: float, y: float, text: str,
                      color=(0.03, 0.06, 0.12), morph=morph, overlay=True)
 
 
-class TextWriter:
-    """Zbiera znaki i zapisuje je w jednym przebiegu PDF.
+class ShapeWriter:
+    """Zbiera znaki i zapisuje je jednym Shape.
 
-    PyMuPDF za każdym insert_text powtarwa pełną walidację czcionki. Przy
-    kilkuset znakach na stronę tę pracę wykonujemy raz, a nie per znak.
+    PyMuPDF przy każdym `page.insert_text` przelicza balans Q zawartości
+    strony. Przy kilkuset znakach wykonujemy to raz, a nie per znak, co
+    skraca czas ok. 3–5x. Ścisnięte napisy używają tego samego mechanizmu
+    `morph`, więc geometria i wygląd zostają bez zmian.
     """
 
     def __init__(self, page: fitz.Page, font: fitz.Font):
+        self.shape = fitz.Shape(page)
         self.page = page
         self.font = font
-        self.runs: list[tuple[str, float, float, float, float]] = []
-        self.cached_font = None
-        self.cashed_text = None
         self.color = (0.03, 0.06, 0.12)
+        self.count = 0
 
     def add(self, x: float, y: float, text: str, fontsize: float, xscale: float = 1.0) -> None:
         if not text:
             return
-        self.runs.append((text, x, y, fontsize, xscale))
+        morph = (fitz.Point(x, y), fitz.Matrix(xscale, 0, 0, 1, 0, 0)) if abs(xscale - 1) > 0.00001 else None
+        self.shape.insert_text(fitz.Point(x, y), text, fontsize=fontsize,
+                               fontname="DrukiFormFont", color=self.color,
+                               morph=morph)
+        self.count += 1
 
     def write(self) -> None:
-        if not self.runs:
-            return
-        for text, x, y, fontsize, xscale in self.runs:
-            _draw(self.page, x, y, text, self.font, fontsize, xscale)
+        if self.count:
+            self.shape.commit()
 
 
 def add_fitted_line(page: fitz.Page, font: fitz.Font, text: str,
                     x_edges: list[int], baseline_px: int, dy_px: int = 0,
-                    size: float = 9.5) -> None:
+                    size: float = 9.5, writer: "ShapeWriter | None" = None) -> None:
     """Zapis ciągły po przekroczeniu liczby kratek.
 
     Wykorzystuje całą szerokość pola. Jeżeli naturalny napis jest węższy,
@@ -142,15 +147,22 @@ def add_fitted_line(page: fitz.Page, font: fitz.Font, text: str,
             char_width = font.text_length(char, fontsize=size)
             char_scale = min(1.0, step / char_width) if char_width else 1.0
             x = left + i * step + (step - char_width * char_scale) / 2
-            _draw(page, x, y, char, font, size, xscale=char_scale)
+            if writer is None:
+                _draw(page, x, y, char, font, size, xscale=char_scale)
+            else:
+                writer.add(x, y, char, size, xscale=char_scale)
         return
-    _draw(page, left, y, text, font, size, xscale=scale)
+    if writer is None:
+        _draw(page, left, y, text, font, size, xscale=scale)
+    else:
+        writer.add(left, y, text, size, xscale=scale)
 
 
 def add_cells(page: fitz.Page, font: fitz.Font, text: str,
               x_edges: list[int], baseline_px: int, dy_px: int = 0,
               right: bool = False, size: float = 9.5,
-              use_full_width: bool = False) -> None:
+              use_full_width: bool = False,
+              writer: "ShapeWriter | None" = None) -> None:
     text = text.upper()
     for char in set(text) - {" "}:
         if not font.has_glyph(ord(char), fallback=False):
@@ -159,7 +171,7 @@ def add_cells(page: fitz.Page, font: fitz.Font, text: str,
     if len(text) > capacity:
         # Wyłącznie po przekroczeniu pojemności kratek przejdź do trybu
         # ciągłego, dopasowanego napisu. Krótsze teksty zostają w kratkach.
-        add_fitted_line(page, font, text, x_edges, baseline_px, dy_px, size=size)
+        add_fitted_line(page, font, text, x_edges, baseline_px, dy_px, size=size, writer=writer)
         return
     start = capacity - len(text) if right else 0
     # Dla kwoty słownie nawet przy krótkim tekście wykorzystujemy cały wiersz,
@@ -188,24 +200,28 @@ def add_cells(page: fitz.Page, font: fitz.Font, text: str,
         width = font.text_length(char, fontsize=size)
         x = left + (right_edge - left - width) / 2
         y = (baseline_px + dy_px + BASELINE_SHIFT_PX) * PX_PT + _oy()
-        _draw(page, x, y, char, font, size)
+        if writer is None:
+            _draw(page, x, y, char, font, size)
+        else:
+            writer.add(x, y, char, size)
 
 
-def draw_amount_tail_bar(page: fitz.Page, number_of_characters: int, offset_px: int = 0) -> None:
-    """Opcjonalna linia w pozostałych kratkach po kwocie.
+def draw_amount_tail_dashes(page: fitz.Page, number_of_characters: int, offset_px: int = 0) -> None:
+    """Opcjonalne myślniki w pozostałych kratkach po kwocie.
 
     NIE jest oficjalnym wymogiem formularza W/P. Występuje tylko na życzenie
-    użytkownika i może zostać wyłączona w ustawieniach formularza.
+    użytkownika i może zostać wyłączone w ustawieniach formularza.
     """
     capacity = len(AMOUNT_X) - 1
     if number_of_characters >= capacity or not number_of_characters:
         return
-    x1 = (AMOUNT_X[number_of_characters] + 3.0) * PX_PT + _ox()
-    x2 = (AMOUNT_X[-1] - 3.0) * PX_PT + _ox()
     y = (LINES_Y["amount"] + offset_px + BASELINE_SHIFT_PX - 5.6) * PX_PT + _oy()
-    if x2 > x1:
-        page.draw_line(fitz.Point(x1, y), fitz.Point(x2, y),
-                       color=(0.06, 0.08, 0.11), width=1.0, overlay=True)
+    for index in range(number_of_characters, capacity):
+        x1 = (AMOUNT_X[index] + 6.0) * PX_PT + _ox()
+        x2 = (AMOUNT_X[index + 1] - 6.0) * PX_PT + _ox()
+        if x2 > x1:
+            page.draw_line(fitz.Point(x1, y), fitz.Point(x2, y),
+                           color=(0.06, 0.08, 0.11), width=1.0, overlay=True)
 
 
 def draw_wp_cross(page: fitz.Page, payment_type: str, offset_px: int = 0) -> None:
@@ -226,6 +242,27 @@ def generate_pdf(data: Payment, target: str | Path, strict: bool = True,
     if errors:
         raise InvalidPayment("\n".join(errors))
     return _render_pdf(data, target)
+
+
+def _person_rows(name: str, address: str) -> list[str]:
+    """Nazwa i adres to jedno pole o dwóch wierszach.
+
+    Gdy użytkownik wypełni oba pola, jego podział jest zachowany: nazwa
+    zostaje w pierwszym wierszu, adres w drugim. Gdy drugie pole jest puste,
+    cały tekst jest składany ciągle: pierwszy wiersz wypełniamy do końca,
+    reszta przechodzi do drugiego. Podział jest znakowy, więc może wypaść
+    w środku kodu pocztowego. Wiersz jest tylko dopasowywany do szerokości,
+    nigdy ucinany.
+    """
+    capacity = len(GRID_X) - 1
+    name_line = " ".join(normalize("NFC", name).split())
+    address_line = " ".join(normalize("NFC", normalized_address(address)).split())
+    if name_line and address_line:
+        return [name_line, address_line]
+    combined = name_line or address_line
+    if not combined:
+        return ["", ""]
+    return [combined[:capacity], combined[capacity:]]
 
 
 def _render_pdf(data: Payment, target: str | Path, *, draft: bool = False) -> Path:
@@ -255,14 +292,8 @@ def _render_pdf(data: Payment, target: str | Path, *, draft: bool = False) -> Pa
         page = doc[0]
         page.insert_font(fontname="DrukiFormFont", fontfile=str(font_path))
         font = fitz.Font(fontfile=str(font_path))
-        # nazwa odbiorcy i nazwa odbiorcy cd. — dwa wiersze, każdy do 27 znaków.
-        # Dłuższy tekst jest dzielony automatycznie między te dwie linie.
-        recipient_lines = field(fit_rows, ["", ""], data.recipient, rows=2)
-        recipient_address = field(fit_rows, [""] * 1, data.recipient_address, rows=1)
-        recipient = [recipient_lines[0],
-                     recipient_lines[1] if recipient_lines[1] else recipient_address[0]]
-        payer = field(fit_rows, [""] * 1, data.payer, rows=1)
-        payer_address = field(fit_rows, [""] * 1, data.payer_address, rows=1)
+        recipient = _person_rows(data.recipient, data.recipient_address)
+        payer = _person_rows(data.payer, data.payer_address)
         title = field(fit_rows, [""] * 2, data.title, rows=2)
         acc = field(account, "", data.recipient_account)
         amount = field(normalized_amount, "", data.amount) if data.amount.strip() else ""
@@ -271,35 +302,73 @@ def _render_pdf(data: Payment, target: str | Path, *, draft: bool = False) -> Pa
         numeric_amount = (AMOUNT_PREFIX if data.amount_prefix_stars else "") + amount if amount else ""
         if draft and len(numeric_amount) >= len(AMOUNT_X):
             numeric_amount = ""
+        writer = ShapeWriter(page, font)
         for offset in (0, SECTION_OFFSET_PX):
-            field(add_cells, None, page, font, recipient[0], GRID_X, LINES_Y["recipient"][0], offset)
-            field(add_cells, None, page, font, recipient[1], GRID_X, LINES_Y["recipient"][1], offset)
-            field(add_cells, None, page, font, acc, ACCOUNT_X, LINES_Y["recipient_account"], offset)
-            field(add_cells, None, page, font, data.currency.strip(), CURRENCY_X, LINES_Y["currency"], offset, size=9)
+            field(add_cells, None, page, font, recipient[0], GRID_X, LINES_Y["recipient"][0], offset, writer=writer)
+            field(add_cells, None, page, font, recipient[1], GRID_X, LINES_Y["recipient"][1], offset, writer=writer)
+            field(add_cells, None, page, font, acc, ACCOUNT_X, LINES_Y["recipient_account"], offset, writer=writer)
+            field(add_cells, None, page, font, data.currency.strip(), CURRENCY_X, LINES_Y["currency"], offset, size=9, writer=writer)
             # Standardowy zapis kwoty od lewej, bez rozciągania cyfr.
-            field(add_cells, None, page, font, numeric_amount, AMOUNT_X, LINES_Y["amount"], offset, right=False)
+            field(add_cells, None, page, font, numeric_amount, AMOUNT_X, LINES_Y["amount"], offset, right=False, writer=writer)
             if data.amount_end_bar:
-                draw_amount_tail_bar(page, len(numeric_amount), offset)
+                draw_amount_tail_dashes(page, len(numeric_amount), offset)
             # Kwota słownie traktowana jak pole kratkowe: każda litera w kratce,
             # a ścisnięcie dopiero po przekroczeniu liczby kratek.
             if data.payment_type == "W":
                 field(add_cells, None, page, font, words,
-                      ACCOUNT_X, LINES_Y["amount_words"], offset, size=9.2)
+                      ACCOUNT_X, LINES_Y["amount_words"], offset, size=9.2, writer=writer)
             else:
                 field(add_cells, None, page, font, payer_account,
-                      ACCOUNT_X, LINES_Y["amount_words"], offset, size=9.2)
+                      ACCOUNT_X, LINES_Y["amount_words"], offset, size=9.2, writer=writer)
             draw_wp_cross(page, data.payment_type, offset)
-            field(add_cells, None, page, font, payer[0], GRID_X, LINES_Y["payer"][0], offset)
-            field(add_cells, None, page, font, payer_address[0], GRID_X, LINES_Y["payer"][1], offset)
+            field(add_cells, None, page, font, payer[0], GRID_X, LINES_Y["payer"][0], offset, writer=writer)
+            field(add_cells, None, page, font, payer[1], GRID_X, LINES_Y["payer"][1], offset, writer=writer)
             field(add_cells, None, page, font, title[0], GRID_X, LINES_Y["title"][0],
-                      offset + TITLE_EXTRA_SHIFT_PX)
+                      offset + TITLE_EXTRA_SHIFT_PX, writer=writer)
             field(add_cells, None, page, font, title[1], GRID_X, LINES_Y["title"][1],
-                      offset + TITLE_EXTRA_SHIFT_PX)
+                      offset + TITLE_EXTRA_SHIFT_PX, writer=writer)
+        writer.write()
         doc.set_metadata({"title":"Polecenie przelewu / wpłata gotówkowa — wypełnione"})
         doc.save(str(path), garbage=4, deflate=True)
     finally:
         doc.close()
     return path
+
+
+def illegible_fields(data: Payment) -> list[tuple[str, int, float]]:
+    """Sprawdza czytelność pól, które mogą zostać nadmiernie ściśnięte."""
+    font = fitz.Font(fontfile=str(find_font()))
+    result: list[tuple[str, int, float]] = []
+
+    def inspect(label: str, lines: list[str], x_edges: list[int], size: float) -> None:
+        capacity = len(x_edges) - 1
+        field_width = (x_edges[-1] - x_edges[0]) * PX_PT
+        for line in lines:
+            text = " ".join(line.upper().split())
+            if not text or len(text) <= capacity:
+                continue
+            natural = font.text_length(text, fontsize=size)
+            if natural <= 0 or field_width <= 0:
+                continue
+            effective = size * field_width / natural
+            if effective < MIN_EFFECTIVE_PT_PER_CHAR:
+                result.append((label, len(text), effective))
+
+    try:
+        inspect("Tytuł płatności", fit_rows(data.title, rows=2), GRID_X, 9.5)
+    except InvalidPayment:
+        pass
+    inspect("Odbiorca (nazwa i adres)",
+            _person_rows(data.recipient, data.recipient_address), GRID_X, 9.5)
+    inspect("Zleceniodawca (nazwa i adres)",
+            _person_rows(data.payer, data.payer_address), GRID_X, 9.5)
+    inspect("Kwota słownie",
+            fit_rows(amount_in_words(data.amount), rows=1) if data.amount.strip() else [""],
+            ACCOUNT_X, 9.2)
+    inspect("Rachunek zleceniodawcy",
+            fit_rows(data.payer_account, rows=1) if data.payment_type == "P" else [""],
+            ACCOUNT_X, 9.2)
+    return result
 
 
 def preview_png(data: Payment, scale: float = 1.25,

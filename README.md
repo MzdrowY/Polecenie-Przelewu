@@ -1,6 +1,6 @@
 # Polecenie przelewu
 
-Aplikacja do wypełniania, zapisywania i drukowania pocztowych blankietów wpłaty gotówkowej (W) i polecenia przelewu (P). Eksportuje pełną stronę A4 z blankietem i danymi do PDF oraz umożliwia podgląd, druk, korzystanie z historii i książki odbiorców.
+Aplikacja do wypełniania, zapisywania i drukowania pocztowych blankietów wpłaty gotówkowej (W) i polecenia przelewu (P). Eksportuje pełną stronę A4 z blankietem i danymi do PDF oraz umożliwia podgląd, druk, korzystanie z historii oraz książek odbiorców i nadawców.
 
 Autor: Maciej Zdrowowicz · Kontakt: [mzdrowy@gmail.com](mailto:mzdrowy@gmail.com) · Licencja: [MIT](LICENSE)
 
@@ -33,4 +33,8 @@ Kod jest w `app/`, oryginalny blankiet w `assets/template.pdf`, testy w `tests/`
 
 ## Wersja
 
-v0.12.1 — informacje o autorze, zabezpieczenie przywracania kopii oraz poprawka kalibracji.
+v0.13.4 — myślniki w wolnych kratkach po kwocie zamiast jednej linii.
+v0.13.3 — menu kontekstowe w jasnym stylu aplikacji.
+v0.13.2 — przycisk zamykania panelu historii.
+v0.13.1 — ciągłe pole odbiorcy i zleceniodawcy, polskie menu kontekstowe oraz kopiowanie i wklejanie.
+v0.13.0 — książka nadawców, pełne adresy na blankiecie oraz poprawione okna potwierdzeń.

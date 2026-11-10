@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import pymupdf
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPageSize
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtTest import QTest
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButto
 from app.database import Database
 from app.pdfgen import ACCOUNT_X, PX_PT
 from app.ui import Window
+from app import __version__
 from test_core import valid_test_account
 
 
@@ -41,7 +42,7 @@ class MacGuiTests(unittest.TestCase):
         self.window.close()
 
     def click(self, label):
-        button = next(w for w in self.window.findChildren(QPushButton) if w.text() == label)
+        button = next(w for w in self.window.findChildren(QPushButton) if w.text() == label and w.isVisible())
         QTest.mouseClick(button, Qt.MouseButton.LeftButton)
 
     def fill(self):
@@ -118,14 +119,65 @@ class MacGuiTests(unittest.TestCase):
         self.window._fields["amount"].setText("99,99")
         self.click("Zapisz w historii")
         self.assertEqual(self.db.get(transfer).amount, "99,99")
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
-            self.click("Usuń")
+        def dismiss_confirmation():
+            dialog = QApplication.activeModalWidget()
+            if dialog is None:
+                return
+            try:
+                cancel = next(b for b in dialog.findChildren(QPushButton) if b.text() == "Anuluj")
+                background = dialog.grab().toImage().pixelColor(4, 4).name()
+                QTest.keyClick(dialog, Qt.Key.Key_Escape)
+                appearance.append((background, cancel.isDefault(), dialog.isVisible()))
+            finally:
+                if dialog.isVisible():
+                    dialog.reject()
+
+        appearance = []
+        QTimer.singleShot(0, dismiss_confirmation)
+        self.click("Usuń")
+        self.assertEqual(appearance, [("#f3f2ee", True, False)])
         self.assertEqual(len(self.db.all()), 2)
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+        with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Accepted):
             self.click("Usuń")
         self.assertEqual([r["id"] for r in self.db.all()], [cash])
         with closing(Database(self.root / "history.sqlite3").conn) as conn:
             self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
+    def test_sender_profiles_persist_and_fill_only_sender_fields(self):
+        fields = self.window._fields
+        fields["payer"].setText("Jan Testowy")
+        fields["payer_address"].setText("ul. Próbna 1")
+        self.click("Nadawcy")
+        self.click("Zapamiętaj z formularza")
+        self.click("P · Przelew")
+        fields["payer"].setText("Firma Testowa")
+        fields["payer_address"].setText("ul. Firmowa 2")
+        fields["payer_account"].setText(valid_test_account())
+        self.click("Nadawcy")
+        self.click("Zapamiętaj z formularza")
+        with closing(Database(self.root / "history.sqlite3").conn) as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM senders").fetchone()[0], 2)
+
+        self.window.new_document(force=True)
+        self.click("P · Przelew")
+        fields["amount"].setText("15,00")
+
+        self.click("Nadawcy")
+        self.assertEqual(self.window.sender_list.count(), 2)
+        self.window.sender_search.setText("firmowa")
+        self.assertEqual(self.window.sender_list.count(), 1)
+        self.click("Wstaw do formularza")
+        data = self.window.current_data()
+        self.assertEqual(data.payer, "Firma Testowa")
+        self.assertEqual(data.payer_address, "ul. Firmowa 2")
+        self.assertEqual(data.payer_account.replace(" ", ""), valid_test_account())
+        self.assertEqual(data.amount, "15,00")
+        self.click("Nadawcy")
+        self.window.sender_search.setText("jan")
+        self.click("Wstaw do formularza")
+        self.assertEqual(self.window.current_data().payer, "Jan Testowy")
+        self.assertEqual(self.window.current_data().payer_account, "")
+        self.assertEqual(self.db.all(), [])
 
     def test_catalog_reuses_recipient_without_overwriting_history(self):
         self.fill()
@@ -170,6 +222,21 @@ class MacGuiTests(unittest.TestCase):
         self.assertEqual(self.window.current_data().title, "Tytuł testowy\nDrugi wiersz")
         self.assertIsNone(self.window.current_id)
 
+    def test_preview_accepts_address_copied_with_line_break(self):
+        self.fill()
+        self.window.activateWindow()
+        self.qt.processEvents()
+        address = self.window._fields["recipient_address"]
+        address.setFocus()
+        address.selectAll()
+        address.insert("Próbna 1, 1\n2-345 Łódź")
+        self.assertEqual(self.window.current_data().recipient_address, "Próbna 1, 12-345 Łódź")
+        self.window._fields["payer_address"].setFocus()
+        self.assertEqual(address.text(), "Próbna 1, 12-345 Łódź")
+        self.click("Sprawdź wydruk →")
+        self.assertIs(self.window.pages.currentWidget(), self.window.preview_page)
+        self.assertEqual(self.window.current_data().title, "Tytuł testowy\nDrugi wiersz")
+
     def test_checked_state_switch_updates_transfer_field(self):
         self.window.payment_types.button(1).setChecked(True)
         self.assertTrue(self.window.payer_account_field.isEnabled())
@@ -187,7 +254,7 @@ class MacGuiTests(unittest.TestCase):
         with patch.object(QDialog, 'exec', side_effect=capture_about):
             self.window._show_about()
             message = ' '.join(messages)
-            for expected in ('0.12.1', 'Maciej Zdrowowicz', 'mzdrowy@gmail.com', 'MIT',
+            for expected in (__version__, 'Maciej Zdrowowicz', 'mzdrowy@gmail.com', 'MIT',
                              'https://github.com/MzdrowY/Polecenie-Przelewu'):
                 self.assertIn(expected, message)
         self.fill()
@@ -215,11 +282,11 @@ class MacGuiTests(unittest.TestCase):
             reply.read.return_value = json.dumps({'tag_name': tag,
                 'html_url': 'https://example.com/release'}).encode()
             return reply
-        with patch('app.ui.urllib.request.urlopen', return_value=response('v0.12.1')):
+        with patch('app.ui.urllib.request.urlopen', return_value=response(f'v{__version__}')):
             with patch.object(self.window, '_show_update_message') as message:
                 self.window._check_for_updates()
                 self.assertIn('aktualnej wersji', message.call_args.args[1])
-        with patch('app.ui.urllib.request.urlopen', return_value=response('v0.12.2')):
+        with patch('app.ui.urllib.request.urlopen', return_value=response('v999.0.0')):
             with patch.object(self.window, '_show_update_message', return_value=True) as message:
                 with patch('app.ui.QDesktopServices.openUrl') as open_url:
                     self.window._check_for_updates()

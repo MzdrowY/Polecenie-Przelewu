@@ -6,19 +6,19 @@ import tempfile
 import urllib.request
 
 import pymupdf as fitz
-from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF, QUrl, QSettings, QTimer
+from PySide6.QtCore import Qt, QByteArray, QStandardPaths, QEvent, QRect, QRectF, QUrl, QSettings, QTimer, QTranslator, QLibraryInfo
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPageSize, QPageLayout, QFontDatabase, QKeySequence, QShortcut, QColor, QIcon, QAction, QDesktopServices
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QButtonGroup, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QStackedWidget,
     QScrollArea, QListWidget, QListWidgetItem, QFileDialog, QMessageBox,
-    QFrame, QGraphicsDropShadowEffect, QDoubleSpinBox, QDialog, QLayout,
+    QFrame, QGraphicsDropShadowEffect, QDoubleSpinBox, QDialog, QLayout, QMenu,
 )
 
-from .models import Payment, InvalidPayment, account_digits, valid_nrb, normalized_amount, payment_issues
+from .models import Payment, InvalidPayment, account_digits, valid_nrb, normalized_amount, normalized_address, payment_issues, requirement_gaps
 from .amount_words import amount_in_words
-from .pdfgen import generate_pdf, preview_png, PX_PT, SECTION_OFFSET_PX
+from .pdfgen import generate_pdf, preview_png, PX_PT, SECTION_OFFSET_PX, illegible_fields
 from .database import Database, DatabaseOpenError
 
 
@@ -93,6 +93,34 @@ QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { background: #F3F2EE; bo
 QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #DEDAD0; }
 """
 
+MENU_STYLE = """
+QMenu {
+    background-color: #ffffff;
+    border: 1px solid #e4e2dd;
+    border-radius: 10px;
+    padding: 5px;
+    color: #141413;
+}
+QMenu::item {
+    background: transparent;
+    padding: 6px 28px 6px 12px;
+    border-radius: 6px;
+    margin: 1px 3px;
+}
+QMenu::item:selected {
+    background: #eae8e1;
+    color: #141413;
+}
+QMenu::item:disabled { color: #a8a29e; }
+QMenu::separator {
+    height: 1px;
+    background: #efece6;
+    margin: 4px 8px;
+}
+"""
+
+STYLE += MENU_STYLE
+
 
 PREVIEW_SCALE = 4
 INFO_DIALOG_STYLE = """
@@ -108,6 +136,18 @@ INFO_DIALOG_STYLE = """
 FIRST_RECEIPT = QRectF(72, 33, 449, 313)
 
 
+def install_polish_translations(app: QApplication) -> None:
+    """Tłumaczy wbudowane teksty Qt: menu kontekstowe, przyciski okien itd."""
+    directory = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    translators = []
+    for name in ("qtbase_pl", "qt_pl"):
+        translator = QTranslator(app)
+        if translator.load(name, directory):
+            app.installTranslator(translator)
+            translators.append(translator)
+    app._polish_translators = translators
+
+
 class Window(QMainWindow):
     def __init__(self, database: Database):
         super().__init__()
@@ -116,7 +156,6 @@ class Window(QMainWindow):
         self._preview_pixmap = QPixmap()
         self._issue_labels = {}
         self._form_focus = None
-        self._active_person = ""
         self._dirty = False
         self._loading = False
         self._fields: dict[str,QLineEdit|QPlainTextEdit] = {}
@@ -140,6 +179,7 @@ class Window(QMainWindow):
         import_action = QAction("Importuj kopię zapasową (JSON)…", self)
         import_action.triggered.connect(self.import_backup)
         file_menu.addAction(import_action)
+        self._make_edit_menu()
         help_menu = self.menuBar().addMenu("Pomoc")
         action = QAction("Sprawdź aktualizacje", self)
         action.triggered.connect(self._check_for_updates)
@@ -147,6 +187,61 @@ class Window(QMainWindow):
         about = QAction("O programie", self)
         about.triggered.connect(self._show_about)
         help_menu.addAction(about)
+
+    def _make_edit_menu(self):
+        """Polskie menu Edycja; skróty działają też bez otwierania menu."""
+        edit_menu = self.menuBar().addMenu("Edycja")
+        self._edit_actions: dict[str, QAction] = {}
+        for label, key, name in (
+            ("Cofnij", QKeySequence.StandardKey.Undo, "undo"),
+            ("Ponów", QKeySequence.StandardKey.Redo, "redo"),
+            ("Wytnij", QKeySequence.StandardKey.Cut, "cut"),
+            ("Kopiuj", QKeySequence.StandardKey.Copy, "copy"),
+            ("Wklej", QKeySequence.StandardKey.Paste, "paste"),
+            ("Zaznacz wszystko", QKeySequence.StandardKey.SelectAll, "selectAll"),
+        ):
+            action = QAction(label, self)
+            action.setShortcut(QKeySequence(key))
+            action.triggered.connect(lambda _checked=False, method=name: self._run_edit_action(method))
+            edit_menu.addAction(action)
+            self._edit_actions[name] = action
+        edit_menu.aboutToShow.connect(self._update_edit_actions)
+
+    def _edit_target(self) -> QLineEdit | QPlainTextEdit | None:
+        for widget in (self.focusWidget(), QApplication.focusWidget()):
+            if isinstance(widget, (QLineEdit, QPlainTextEdit)):
+                return widget
+        return None
+
+    def _run_edit_action(self, name: str) -> None:
+        widget = self._edit_target()
+        if widget is not None:
+            getattr(widget, name)()
+
+    def _update_edit_actions(self) -> None:
+        widget = self._edit_target()
+        if widget is None:
+            for action in self._edit_actions.values():
+                action.setEnabled(False)
+            return
+        if isinstance(widget, QPlainTextEdit):
+            document = widget.document()
+            has_selection = widget.textCursor().hasSelection()
+            can_undo = document.isUndoAvailable()
+            can_redo = document.isRedoAvailable()
+            has_text = bool(widget.toPlainText())
+        else:
+            has_selection = widget.hasSelectedText()
+            can_undo = widget.isUndoAvailable()
+            can_redo = widget.isRedoAvailable()
+            has_text = bool(widget.text())
+        clipboard_has_text = bool(QApplication.clipboard().text())
+        self._edit_actions["undo"].setEnabled(can_undo)
+        self._edit_actions["redo"].setEnabled(can_redo)
+        self._edit_actions["cut"].setEnabled(has_selection)
+        self._edit_actions["copy"].setEnabled(has_selection)
+        self._edit_actions["paste"].setEnabled(clipboard_has_text)
+        self._edit_actions["selectAll"].setEnabled(has_text)
 
     def _check_for_updates(self):
         from app import __version__
@@ -181,9 +276,16 @@ class Window(QMainWindow):
             self._show_update_message("Aktualizacje", f"Nie udało się sprawdzić aktualizacji:\n{exc}")
 
     def _show_update_message(self, heading, message, *, offer_download=False):
+        return self._show_info_dialog(
+            heading, message, confirm_label="Otwórz stronę" if offer_download else None,
+            cancel_label="Nie teraz" if offer_download else "Zamknij",
+        ) == QDialog.DialogCode.Accepted
+
+    def _show_info_dialog(self, heading, message, *, confirm_label=None,
+                          cancel_label="Zamknij", discard_label=None):
         dialog = QDialog(self)
         dialog.setObjectName("aboutDialog")
-        dialog.setWindowTitle("Aktualizacje")
+        dialog.setWindowTitle(heading)
         dialog.setStyleSheet(INFO_DIALOG_STYLE)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(22, 19, 22, 18)
@@ -199,15 +301,25 @@ class Window(QMainWindow):
         layout.addWidget(text)
         buttons = QHBoxLayout()
         buttons.addStretch()
-        close = QPushButton("Nie teraz" if offer_download else "Zamknij")
+        close = QPushButton(cancel_label)
+        close.setDefault(True)
+        close.setFocus()
         close.clicked.connect(dialog.reject)
         buttons.addWidget(close)
-        if offer_download:
-            open_page = QPushButton("Otwórz stronę")
-            open_page.clicked.connect(dialog.accept)
-            buttons.addWidget(open_page)
+        if discard_label:
+            discard = QPushButton(discard_label)
+            discard.setAutoDefault(False)
+            discard.clicked.connect(lambda: dialog.done(QMessageBox.StandardButton.Discard.value))
+            buttons.addWidget(discard)
+        if confirm_label:
+            confirm = QPushButton(confirm_label)
+            confirm.setAutoDefault(False)
+            confirm.clicked.connect(dialog.accept)
+            buttons.addWidget(confirm)
         layout.addLayout(buttons)
-        return dialog.exec() == QDialog.DialogCode.Accepted
+        result = dialog.exec()
+        dialog.deleteLater()
+        return result
 
     def _show_about(self):
         from app import __version__
@@ -273,6 +385,7 @@ class Window(QMainWindow):
             return
         if QMessageBox.question(self, "Przywróć kopię zapasową",
                 "Import zastąpi całą obecną historię i książkę odbiorców. "
+                "Jeśli kopia zawiera listę nadawców, zastąpi również obecną listę. "
                 "Przed zmianą zostanie zachowana kopia obecnej bazy. Kontynuować?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
@@ -337,6 +450,7 @@ class Window(QMainWindow):
         form_layout.setSpacing(0)
         header = self._bar(form_layout, "toolbar")
         self._button(header, "Odbiorcy", self.show_recipients, style="quiet")
+        self._button(header, "Nadawcy", self.show_senders, style="quiet")
         self.history_toggle = self._button(header, "Historia", style="quiet")
         self.history_toggle.setCheckable(True)
         header.addStretch()
@@ -358,9 +472,20 @@ class Window(QMainWindow):
         left.setFixedWidth(280)
         left_l = QVBoxLayout(left)
         left_l.setContentsMargins(13, 18, 9, 12)
+        head_row = QHBoxLayout()
+        head_row.setContentsMargins(0, 0, 0, 0)
+        head_row.setSpacing(6)
         head = QLabel("Historia")
         head.setObjectName("heading")
-        left_l.addWidget(head)
+        head_row.addWidget(head)
+        head_row.addStretch(1)
+        self.history_close = QPushButton("Zamknij")
+        self.history_close.setObjectName("quiet")
+        self.history_close.setToolTip("Zamknij panel historii")
+        self.history_close.setAccessibleName("Zamknij historię")
+        self.history_close.clicked.connect(lambda: self.history_toggle.setChecked(False))
+        head_row.addWidget(self.history_close)
+        left_l.addLayout(head_row)
         info = QLabel("Zapisane blankiety")
         info.setObjectName("muted")
         left_l.addWidget(info)
@@ -368,6 +493,7 @@ class Window(QMainWindow):
         self.search.setProperty("searchField", True)
         self.search.setPlaceholderText("Szukaj odbiorcy, konta, kwoty...")
         self.search.textChanged.connect(self.refresh_history)
+        self._attach_field_context_menu(self.search)
         left_l.addWidget(self.search)
         self.search.setClearButtonEnabled(True)
         self.history = QListWidget()
@@ -385,6 +511,7 @@ class Window(QMainWindow):
         left.hide()
         self.history_toggle.toggled.connect(self._toggle_history)
 
+        body.addWidget(self.history_panel, 0)
         editor = QScrollArea()
         editor.setObjectName("editor")
         self.editor = editor
@@ -438,6 +565,7 @@ class Window(QMainWindow):
         review = self._button(footer, "Sprawdź wydruk →", self.show_preview, style="primary")
         self._build_preview()
         self._build_recipients()
+        self._build_senders()
         self.form_page.installEventFilter(self)
 
         shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.form_page)
@@ -456,6 +584,9 @@ class Window(QMainWindow):
         close_catalog = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.recipients_page)
         close_catalog.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         close_catalog.activated.connect(self.back_to_form)
+        close_senders = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.senders_page)
+        close_senders.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        close_senders.activated.connect(self.back_to_form)
 
     def _bar(self, parent, name):
         widget = QWidget()
@@ -547,9 +678,9 @@ class Window(QMainWindow):
         amount_heading.addStretch()
         amount_heading.setSpacing(8)
         self.amount_stars_box = self._button(amount_heading, "* Gwiazdki", style="chip")
-        self.amount_bar_box = self._button(amount_heading, "‒ Kreska", style="chip")
+        self.amount_bar_box = self._button(amount_heading, "‒ Myślniki", style="chip")
         for button, text in ((self.amount_stars_box, "Gwiazdki przed kwotą"),
-                             (self.amount_bar_box, "Kreska po kwocie")):
+                             (self.amount_bar_box, "Myślniki w wolnych kratkach po kwocie")):
             button.setCheckable(True)
             button.setAccessibleName(text)
             button.setToolTip(text)
@@ -607,25 +738,23 @@ class Window(QMainWindow):
         heading = QHBoxLayout()
         heading.addWidget(self._caption("ODBIORCA" if recipient else "WPŁACAJĄCY / ZLECENIODAWCA"))
         heading.addStretch()
-        count_label = QLabel("0/27 zn.")
-        count_label.setObjectName("count")
         if recipient:
-            self.recipient_char_count = count_label
             self._remember_recipient_button = self._button(heading, "Zapamiętaj odbiorcę", self.remember_current_recipient, style="quiet")
             self._remember_recipient_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        else:
-            self.payer_char_count = count_label
-        heading.addWidget(count_label)
         section.addLayout(heading)
         prefix = "recipient" if recipient else "payer"
-        for key, placeholder, accessible in (
-            (prefix, "Nazwa lub imię i nazwisko (do 27 znaków)",
-             "Nazwa odbiorcy" if recipient else "Nazwa wpłacającego"),
-            (prefix + "_address", "Ulica, numer, kod i miejscowość (do 27 znaków)",
-             "Adres odbiorcy" if recipient else "Adres wpłacającego"),
+        for key, placeholder, accessible, hint in (
+            (prefix, "Nazwa lub imię i nazwisko (wiersz 1)",
+             "Nazwa odbiorcy" if recipient else "Nazwa wpłacającego",
+             "Wpisz samą nazwę albo całość z adresem — program rozdzieli tekst."),
+            (prefix + "_address", "Adres (wiersz 2 — opcjonalnie)",
+             "Adres odbiorcy" if recipient else "Adres wpłacającego",
+             "Wpisz adres, jeśli chcesz rozdzielić nazwę i adres. "
+             "Gdy oba fragmenty się mieszczą, adres trafi do drugiego wiersza."),
         ):
             field = self._field(key, placeholder)
             field.setAccessibleName(accessible)
+            field.setToolTip(hint)
             section.addWidget(field)
             section.addWidget(self._issue_label(key))
         return section
@@ -667,17 +796,9 @@ class Window(QMainWindow):
         return label
 
     def _toggle_history(self, opened):
+        self.history_panel.setVisible(opened)
         if opened:
-            self._position_history()
-            self.history_panel.raise_()
-            self.history_panel.show()
             self.search.setFocus()
-        else:
-            self.history_panel.hide()
-
-    def _position_history(self):
-        geometry = self.editor.geometry()
-        self.history_panel.setGeometry(geometry.x(), geometry.y(), self.history_panel.width(), geometry.height())
 
     def _field(self, key, placeholder, multi=False):
         field = QPlainTextEdit() if multi else QLineEdit()
@@ -697,6 +818,7 @@ class Window(QMainWindow):
         field.textChanged.connect(self._update_char_counts)
         field.textChanged.connect(self._mark_dirty)
         field.installEventFilter(self)
+        self._attach_field_context_menu(field)
         self._fields[key] = field
         if key == "amount":
             field.textChanged.connect(self._update_words)
@@ -707,7 +829,76 @@ class Window(QMainWindow):
             field.textChanged.connect(self._update_account_status)
         if key == "payer_account":
             field.textChanged.connect(self._update_payer_account_status)
+        if key in ("recipient_address", "payer_address"):
+            field.editingFinished.connect(lambda: self._format_address(field))
         return field
+
+    def _attach_field_context_menu(self, field):
+        """Podłącza własne menu kontekstowe w stylu aplikacji."""
+        field.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        field.customContextMenuRequested.connect(
+            lambda pos, f=field: self._show_field_context_menu(f, pos)
+        )
+
+    def _show_field_context_menu(self, field, pos):
+        if isinstance(field, QPlainTextEdit):
+            global_pos = field.viewport().mapToGlobal(pos)
+        else:
+            global_pos = field.mapToGlobal(pos)
+        menu = self._build_field_context_menu(field)
+        menu.exec(global_pos)
+        menu.deleteLater()
+
+    def _build_field_context_menu(self, field) -> QMenu:
+        menu = QMenu(self)
+        menu.setStyleSheet(MENU_STYLE)
+        menu.setSeparatorsCollapsible(False)
+        if isinstance(field, QPlainTextEdit):
+            document = field.document()
+            has_selection = field.textCursor().hasSelection()
+            has_text = bool(field.toPlainText())
+            can_undo = document.isUndoAvailable()
+            can_redo = document.isRedoAvailable()
+        else:
+            has_selection = field.hasSelectedText()
+            has_text = bool(field.text())
+            can_undo = field.isUndoAvailable()
+            can_redo = field.isRedoAvailable()
+        clipboard_has_text = bool(QApplication.clipboard().text())
+        entries = (
+            ("Cofnij", QKeySequence.StandardKey.Undo, field.undo, can_undo),
+            ("Ponów", QKeySequence.StandardKey.Redo, field.redo, can_redo),
+            None,
+            ("Wytnij", QKeySequence.StandardKey.Cut, field.cut, has_selection),
+            ("Skopiuj", QKeySequence.StandardKey.Copy, field.copy, has_selection),
+            ("Wklej", QKeySequence.StandardKey.Paste, field.paste, clipboard_has_text),
+            None,
+            ("Usuń", None, lambda: self._delete_field_text(field), has_selection or has_text),
+            ("Zaznacz wszystko", QKeySequence.StandardKey.SelectAll, field.selectAll, has_text),
+        )
+        for entry in entries:
+            if entry is None:
+                menu.addSeparator()
+                continue
+            label, shortcut, handler, enabled = entry
+            action = menu.addAction(label)
+            if shortcut is not None:
+                action.setShortcut(QKeySequence(shortcut))
+            action.setEnabled(enabled)
+            action.triggered.connect(handler)
+        return menu
+
+    @staticmethod
+    def _delete_field_text(field):
+        if isinstance(field, QPlainTextEdit):
+            cursor = field.textCursor()
+            if cursor.hasSelection():
+                cursor.removeSelectedText()
+            else:
+                cursor.deleteChar()
+            field.setTextCursor(cursor)
+        else:
+            field.del_()
 
     def _build_preview(self):
         self.preview_page = QWidget()
@@ -795,6 +986,7 @@ class Window(QMainWindow):
         self.recipient_search.setPlaceholderText("Szukaj po nazwisku, nazwie, adresie lub rachunku")
         self.recipient_search.setAccessibleName("Szukaj odbiorcy")
         self.recipient_search.setClearButtonEnabled(True)
+        self._attach_field_context_menu(self.recipient_search)
         self.recipient_search.textChanged.connect(self._refresh_recipients)
         content.addWidget(self.recipient_search)
         self.recipient_info = QLabel()
@@ -850,7 +1042,7 @@ class Window(QMainWindow):
         row = item.data(Qt.ItemDataRole.UserRole)
         for key, value in (
             ("recipient", row["name"]),
-            ("recipient_address", row["address"]),
+            ("recipient_address", normalized_address(row["address"])),
             ("recipient_account", self._group_account(row["account"])),
         ):
             self._fields[key].setText(value)
@@ -880,6 +1072,117 @@ class Window(QMainWindow):
         field.setFocus()
         self._issue_labels[key].setText(text)
         self._issue_labels[key].show()
+
+    def _build_senders(self):
+        self.senders_page = QWidget()
+        self.pages.addWidget(self.senders_page)
+        layout = QVBoxLayout(self.senders_page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        header = self._bar(layout, "toolbar")
+        title = QLabel("Nadawcy")
+        title.setObjectName("appTitle")
+        header.addWidget(title)
+        header.addStretch()
+        self._button(header, "Wróć do formularza", self.back_to_form)
+
+        content = QVBoxLayout()
+        content.setContentsMargins(16, 14, 16, 14)
+        content.setSpacing(9)
+        layout.addLayout(content, 1)
+        self.sender_search = QLineEdit()
+        self.sender_search.setProperty("searchField", True)
+        self.sender_search.setPlaceholderText("Szukaj po nazwisku, nazwie, adresie lub rachunku")
+        self.sender_search.setAccessibleName("Szukaj nadawcy")
+        self.sender_search.setClearButtonEnabled(True)
+        self._attach_field_context_menu(self.sender_search)
+        self.sender_search.textChanged.connect(self._refresh_senders)
+        content.addWidget(self.sender_search)
+        self.sender_info = QLabel()
+        self.sender_info.setObjectName("muted")
+        self.sender_info.setWordWrap(True)
+        content.addWidget(self.sender_info)
+        self.sender_list = QListWidget()
+        self.sender_list.setAccessibleName("Zapisani nadawcy")
+        self.sender_list.setWordWrap(True)
+        self.sender_list.itemActivated.connect(self.use_sender)
+        content.addWidget(self.sender_list, 1)
+
+        footer = self._bar(layout, "actions")
+        self._button(footer, "Zapamiętaj z formularza", self.remember_current_sender, style="quiet")
+        footer.addStretch()
+        self.use_sender_button = self._button(
+            footer, "Wstaw do formularza", self.use_sender, style="primary",
+        )
+        self.sender_list.currentItemChanged.connect(
+            lambda item, _: self.use_sender_button.setEnabled(item is not None),
+        )
+
+    def show_senders(self):
+        self.history_toggle.setChecked(False)
+        self._form_focus = self.focusWidget()
+        self.sender_search.clear()
+        self._refresh_senders()
+        self.pages.setCurrentWidget(self.senders_page)
+        self.sender_search.setFocus()
+
+    def _refresh_senders(self):
+        query = self.sender_search.text().strip().casefold()
+        account_query = "".join(query.split()).removeprefix("pl").replace("-", "")
+        self.sender_list.clear()
+        for row in self.db.senders():
+            if query and query not in row["name"].casefold() and query not in row["address"].casefold():
+                if not account_query.isdigit() or account_query not in row["account"]:
+                    continue
+            details = "  ·  ".join(filter(None, (self._group_account(row["account"]), row["address"])))
+            item = QListWidgetItem(f'{row["name"]}\n{details}' if details else row["name"])
+            item.setData(Qt.ItemDataRole.UserRole, row)
+            self.sender_list.addItem(item)
+        count = self.sender_list.count()
+        self.sender_list.setCurrentRow(0 if count else -1)
+        self.use_sender_button.setEnabled(bool(count))
+        if count:
+            self.sender_info.setText(f"Wyniki: {count}")
+        elif query:
+            self.sender_info.setText("Brak pasujących nadawców.")
+        else:
+            self.sender_info.setText("Wpisz dane nadawcy w formularzu, a potem wybierz „Zapamiętaj z formularza”.")
+
+    def use_sender(self):
+        item = self.sender_list.currentItem()
+        if item is None:
+            return
+        row = item.data(Qt.ItemDataRole.UserRole)
+        self._clear_error()
+        self._fields["payer"].setText(row["name"])
+        self._fields["payer_address"].setText(normalized_address(row["address"]))
+        self._fields["payer_account"].setText(self._group_account(row["account"]))
+        self._refresh_char_counts()
+        self.back_to_form()
+        self.statusBar().showMessage(f'Wstawiono nadawcę: {row["name"]}.')
+
+    def remember_current_sender(self):
+        self.back_to_form()
+        data = self.current_data()
+        self._clear_error()
+        issues = [(key, message) for key, message in payment_issues(data, strict=False)
+                  if key == "payer_account"]
+        if not data.payer.strip():
+            issues.insert(0, ("payer", "Podaj nazwę firmy lub imię i nazwisko nadawcy."))
+        if issues:
+            key, message = issues[0]
+            field = self._fields[key]
+            self._set_invalid(field, True)
+            self._issue_labels[key].setText(message)
+            self._issue_labels[key].show()
+            field.setFocus()
+            return
+        try:
+            self.db.remember_sender(data)
+        except Exception as exc:
+            QMessageBox.critical(self, "Błąd zapisu nadawcy", str(exc))
+            return
+        self.statusBar().showMessage(f"Zapamiętano nadawcę: {data.payer.strip()}.")
 
     def show_preview(self):
         data = self.validated()
@@ -939,31 +1242,14 @@ class Window(QMainWindow):
         self.preview_label.setPixmap(image)
         self.preview_label.resize(image.deviceIndependentSize().toSize())
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.FocusIn:
-            if watched in (self._fields.get("recipient"), self._fields.get("recipient_address")):
-                self._active_person = "recipient"
-            elif watched in (self._fields.get("payer"), self._fields.get("payer_address")):
-                self._active_person = "payer"
-            elif watched in (self._fields.get("title"),):
-                self._active_person = "title"
+        if event.type() == QEvent.Type.FocusIn and watched is self._fields.get("title"):
             self._update_char_counts()
         if event.type() == QEvent.Type.Resize:
             if watched is self.preview_area.viewport():
                 self._resize_preview()
-            elif watched is self.form_page and self.history_toggle.isChecked():
-                self._position_history()
         return super().eventFilter(watched, event)
 
     def _update_char_counts(self):
-        # Tytuł: licznik dla aktywnej linii (cały tytuł, limit 27 na wiersz, ale pokazujemy długość)
-        if hasattr(self, "recipient_char_count"):
-            if getattr(self, "_active_person", "") == "recipient":
-                field = self._fields["recipient"] if self._fields["recipient"].hasFocus() else self._fields["recipient_address"]
-                self.recipient_char_count.setText(f"{len(field.text())}/27 zn.")
-        if hasattr(self, "payer_char_count"):
-            if getattr(self, "_active_person", "") == "payer":
-                field = self._fields["payer"] if self._fields["payer"].hasFocus() else self._fields["payer_address"]
-                self.payer_char_count.setText(f"{len(field.text())}/27 zn.")
         if hasattr(self, "title_char_count"):
             if self._fields["title"].hasFocus():
                 # licznik dla aktywnej linii (ostatnia linia)
@@ -978,14 +1264,6 @@ class Window(QMainWindow):
 
     def _refresh_char_counts(self):
         """Odśwież liczniki po programowym wczytaniu dokumentu."""
-        if hasattr(self, "recipient_char_count"):
-            value = max(len(self._fields["recipient"].text()),
-                        len(self._fields["recipient_address"].text()))
-            self.recipient_char_count.setText(f"{value}/27 zn.")
-        if hasattr(self, "payer_char_count"):
-            value = max(len(self._fields["payer"].text()),
-                        len(self._fields["payer_address"].text()))
-            self.payer_char_count.setText(f"{value}/27 zn.")
         if hasattr(self, "title_char_count"):
             lines = self._fields["title"].toPlainText().split("\n")
             value = max((len(line) for line in lines), default=0)
@@ -1001,6 +1279,8 @@ class Window(QMainWindow):
 
     @staticmethod
     def _group_account(digits):
+        if not digits:
+            return ""
         return " ".join([digits[:2], *(digits[i:i + 4] for i in range(2, 26, 4))])
 
     def _format_amount(self):
@@ -1009,6 +1289,13 @@ class Window(QMainWindow):
             field.setText(normalized_amount(field.text()))
         except InvalidPayment:
             return
+
+    @staticmethod
+    def _format_address(field):
+        value = field.text()
+        normalized = normalized_address(value)
+        if normalized != value:
+            field.setText(normalized)
 
     def _update_account_status(self):
         raw = self._fields["recipient_account"].text()
@@ -1077,6 +1364,8 @@ class Window(QMainWindow):
         data = {}
         for key, widget in self._fields.items():
             data[key] = widget.toPlainText() if isinstance(widget, QPlainTextEdit) else widget.text()
+        for key in ("recipient_address", "payer_address"):
+            data[key] = normalized_address(data[key])
         data["payment_type"] = "P" if self.payment_types.checkedId() == 1 else "W"
         data["amount_prefix_stars"] = self.amount_stars_box.isChecked()
         data["amount_end_bar"] = self.amount_bar_box.isChecked()
@@ -1108,6 +1397,8 @@ class Window(QMainWindow):
                 text = getattr(payment,key)
                 if isinstance(widget,QPlainTextEdit):
                     widget.setPlainText(text)
+                elif key in ("recipient_address", "payer_address"):
+                    widget.setText(normalized_address(text))
                 else:
                     widget.setText(text)
             self.payment_types.button(int(payment.payment_type == "P")).setChecked(True)
@@ -1141,22 +1432,20 @@ class Window(QMainWindow):
         self.history.blockSignals(False)
 
     def _confirm_discard_changes(self) -> bool:
-        """Zwraca True, gdy można kontynuować bez utraty danych."""
+        """Zwraca True, gdy użytkownik zdecydował się kontynuować."""
         if not self._dirty:
             return True
-        reply = QMessageBox.question(
-            self,
+        reply = self._show_info_dialog(
             "Niezapisane zmiany",
-            "Masz niezapisane zmiany. Zapisać przed kontynuacją?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
+            "Czy zapisać zmiany w historii przed kontynuacją?",
+            confirm_label="Zapisz",
+            cancel_label="Anuluj",
+            discard_label="Nie zapisuj",
         )
-        if reply == QMessageBox.StandardButton.Yes:
+        if reply == QDialog.DialogCode.Accepted:
             self.save_document()
             return not self._dirty
-        if reply == QMessageBox.StandardButton.No:
-            return True
-        return False
+        return reply == QMessageBox.StandardButton.Discard.value
 
     def _restore_history_selection(self, previous):
         self.history.blockSignals(True)
@@ -1255,6 +1544,40 @@ class Window(QMainWindow):
         self._clear_error()
         return data
 
+    def _confirm_output_warnings(self, data: Payment) -> bool:
+        """Ostrzega o tekstach nieczytelnych i brakujących polach wymaganych.
+
+        Nie blokuje druku: użytkownik dostaje pełną informację i decyduje.
+        Zmiany walidacji wymagają osobnej decyzji autora projektu.
+        """
+        readability = illegible_fields(data)
+        gaps = requirement_gaps(data)
+        if not readability and not gaps:
+            return True
+        sections = []
+        if readability:
+            listed = "\n".join(
+                f"• {label}: {count} znaków w wierszu, ok. {effective:.1f} pt/znak"
+                for label, count, effective in readability
+            )
+            sections.append(
+                "Część tekstów zostanie bardzo ściągnięta i może być nieczytelna:\n" + listed
+            )
+        if gaps:
+            listed = "\n".join(f"• {message}" for _key, message in gaps)
+            sections.append(
+                "Wpłacie W brakuje pól wymaganych przez regulamin Poczty Polskiej:\n" + listed
+            )
+        reply = QMessageBox.question(
+            self,
+            "Ostrzeżenie przed wydrukiem",
+            "\n\n".join(sections)
+            + "\n\nDane nie zostały skrócone ani uzupełnione. Wydrukować mimo to?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
     def save_document(self):
         data = self.validated()
         if data is None: return
@@ -1276,6 +1599,7 @@ class Window(QMainWindow):
     def export_document(self):
         data = self.validated()
         if data is None: return
+        if not self._confirm_output_warnings(data): return
         path, _ = QFileDialog.getSaveFileName(self,"Zapisz gotowy druk",
                     str(Path.home()/"Documents"/("wplata-gotowkowa.pdf" if data.payment_type=="W" else "polecenie-przelewu.pdf")),"Plik PDF (*.pdf)")
         if not path: return
@@ -1288,6 +1612,7 @@ class Window(QMainWindow):
     def print_document(self):
         data = self.validated()
         if data is None: return
+        if not self._confirm_output_warnings(data): return
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
         printer.setFullPage(True)
@@ -1316,17 +1641,18 @@ class Window(QMainWindow):
     def delete_document(self):
         payment_id = self.current_id
         if payment_id is None:
-            QMessageBox.information(self,"Usuń","Najpierw wybierz wpis z historii.")
+            self._show_info_dialog("Usuń wpis", "Najpierw wybierz wpis z historii.")
             return
-        response = QMessageBox.question(self,"Potwierdź usunięcie",
-             f"Usunąć formularz nr {payment_id} z lokalnej historii? Operacji nie można cofnąć.",
-             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-             QMessageBox.StandardButton.No)
-        if response == QMessageBox.StandardButton.Yes:
+        confirmed = self._show_info_dialog(
+            "Potwierdź usunięcie",
+            f"Usunąć formularz nr {payment_id} z lokalnej historii? Operacji nie można cofnąć.",
+            confirm_label="Usuń", cancel_label="Anuluj",
+        )
+        if confirmed == QDialog.DialogCode.Accepted:
             try:
                 self.db.delete(payment_id)
             except Exception as exc:
-                QMessageBox.critical(self, "Błąd usuwania", str(exc))
+                self._show_info_dialog("Błąd usuwania", str(exc))
                 return
             self.new_document(force=True)
             self.refresh_history()
@@ -1360,6 +1686,8 @@ def print_a4(data: Payment, printer: QPrinter, offset_x_mm: float = 0.0, offset_
 def run():
     import sys
     app = QApplication.instance() or QApplication([])
+    if not getattr(app, "_polish_translators", None):
+        install_polish_translations(app)
     app.setOrganizationName("Polecenie przelewu")
     app.setApplicationName("Polecenie przelewu")
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -1383,7 +1711,7 @@ def run():
             f"Nie można otworzyć bazy:\n{exc.path}\n\nBłąd: {exc.cause}\n\n"
             "Istniejąca baza nie zostanie usunięta ani nadpisana. "
             "Czy uruchomić aplikację z tymczasową bazą w pamięci? "
-            "Historia i odbiorcy nie będą zapisywani na dysku.",
+            "Historia, odbiorcy i nadawcy nie będą zapisywani na dysku.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1398,7 +1726,7 @@ def run():
             window,
             "Tymczasowa baza danych",
             "Aplikacja działa z tymczasową bazą w pamięci. "
-            "Historia i odbiorcy nie będą zapisywani na dysku.",
+            "Historia, odbiorcy i nadawcy nie będą zapisywani na dysku.",
         )
     if sys.platform == "darwin" and app.platformName() == "cocoa":
         from .macos_menu import hide_services_menu

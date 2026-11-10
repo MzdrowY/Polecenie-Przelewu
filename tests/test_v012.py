@@ -1,4 +1,5 @@
 """Testy v0.12: kalibracja, migracje, backup."""
+from contextlib import closing
 import json
 import tempfile
 import unittest
@@ -44,6 +45,33 @@ class V012Tests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             db.close()
             db2.close()
+
+    def test_sender_backup_roundtrip_and_legacy_import(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                closing(Database(Path(tmp) / "history.sqlite3")) as db, \
+                closing(Database(Path(tmp) / "restored.sqlite3")) as db2:
+            root = Path(tmp)
+            db.remember_sender(Payment(payer="Jan Testowy"))
+            db.remember_sender(Payment(payer="Firma Testowa", payer_address="ul. Próbna 1",
+                                      payment_type="P", payer_account=valid_test_account()))
+            backup = root / "backup.json"
+            db.export_backup(backup)
+            db2.remember_sender(Payment(payer="Dotychczasowy nadawca"))
+            db2.import_backup(backup)
+            self.assertEqual(db2.senders(), db.senders())
+
+            payload = json.loads(backup.read_text(encoding="utf-8"))
+            payload["senders"][0]["account"] = "123"
+            backup.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                db2.import_backup(backup)
+            self.assertEqual(db2.senders(), db.senders())
+
+            payload["schema_version"] = 1
+            del payload["senders"]
+            backup.write_text(json.dumps(payload), encoding="utf-8")
+            db2.import_backup(backup)
+            self.assertEqual(db2.senders(), db.senders())
 
     def test_calibration_moves_text_and_lines_once(self):
         data = Payment(recipient="ODBIORCA Z BARDZO DLUGA NAZWA TESTOWA", recipient_account=valid_test_account(),

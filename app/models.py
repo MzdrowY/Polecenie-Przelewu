@@ -72,6 +72,12 @@ def normalized_amount(value: str) -> str:
     return normalized
 
 
+def normalized_address(value: str) -> str:
+    """Składa adres do jednego wiersza i łączy rozdzielony początek kodu pocztowego."""
+    value = re.sub(r"\b([0-9])\s+([0-9]-[0-9]{3})\b", r"\1\2", value)
+    return " ".join(value.split())
+
+
 def fit_rows(text: str, rows: int = 1, ideal_columns: int = 27) -> list[str]:
     """Wiersze do nadruku. Długie teksty są składane do szerokości, nie ucinane.
 
@@ -90,14 +96,13 @@ def fit_rows(text: str, rows: int = 1, ideal_columns: int = 27) -> list[str]:
     line = lines[0]
     if len(line) <= ideal_columns:
         return [line, ""]
-    words = line.split(" ")
-    if len(words) == 1:
+    split = min((i for i, char in enumerate(line) if char == " "),
+                key=lambda i: abs(i - (len(line) - i - 1)), default=None)
+    if split is None:
         mid = (len(line) + 1) // 2
         return [line[:mid], line[mid:]]
-    splits = [(" ".join(words[:i]), " ".join(words[i:])) for i in range(1, len(words))]
     # Każdy wiersz może być dłuższy od liczby kratek: wtedy zostanie ściśnięty.
-    return list(min(splits, key=lambda pair: (max(len(pair[0]), len(pair[1])),
-                                            abs(len(pair[0])-len(pair[1])))))
+    return [line[:split], line[split + 1:]]
 
 
 def split_grid(text: str, columns: int = 27, rows: int = 2) -> list[str]:
@@ -115,20 +120,10 @@ def payment_issues(payment: Payment, strict: bool = True) -> list[tuple[str, str
     if payment.payment_type == "P" and (strict or payment.payer_account.strip()):
         if not valid_nrb(payment.payer_account):
             errors.append(("payer_account", "Dla przelewu podaj poprawny rachunek zleceniodawcy (26 cyfr)."))
-    for key, label in (
-        ("recipient", "Odbiorca"),
-        ("recipient_address", "Adres odbiorcy"),
-        ("payer", "Wpłacający"),
-        ("payer_address", "Adres wpłacającego"),
-        ("title", "Tytuł"),
-    ):
-        value = getattr(payment, key)
-        # Adresy i pozostałe dane opisowe są opcjonalne: przelew trafia na konto.
-        # Walidowany jest tylko rachunek odbiorcy, kwota (i rachunek zleceniodawcy przy P).
-        try:
-            fit_rows(value, rows=2 if key == "title" else 1)
-        except InvalidPayment as exc:
-            errors.append((key, f"{label}: {exc}"))
+    try:
+        fit_rows(payment.title, rows=2)
+    except InvalidPayment as exc:
+        errors.append(("title", f"Tytuł: {exc}"))
     if strict and not payment.recipient_account.strip():
         errors.append(("recipient_account", "Uzupełnij numer rachunku odbiorcy."))
     elif payment.recipient_account.strip() and not valid_nrb(payment.recipient_account):
@@ -146,6 +141,29 @@ def payment_issues(payment: Payment, strict: bool = True) -> list[tuple[str, str
     if payment.currency.strip().upper() != "PLN":
         errors.append(("currency", "Ten druk obsługuje wyłącznie kwoty w złotych (PLN)."))
     return errors
+
+
+# Pola, których brak regulamin Poczty Polskiej uznaje za przeszkodę w
+# przyjęciu wpłaty na rachunek bankowy: nazwa odbiorcy, imię i nazwisko
+# wpłacającego, adres wpłacającego w PL oraz tytuł wpłaty. Adres odbiorcy
+# jest wprost nieobowiązkowy, dlatego nie występuje w tej liście.
+REQUIRED_FOR_DEPOSIT = (
+    ("recipient", "Odbiorca", "Uzupełnij nazwę odbiorcy."),
+    ("payer", "Wpłacający", "Uzupełnij imię i nazwisko wpłacającego."),
+    ("payer_address", "Adres wpłacającego", "Uzupełnij adres wpłacającego w Polsce."),
+    ("title", "Tytuł", "Uzupełnij tytuł wpłaty (opis transakcji)."),
+)
+
+
+def requirement_gaps(payment: Payment) -> list[tuple[str, str]]:
+    """Pola wymagane dla wpłaty W, których brakuje. Doradcze, bez blokady."""
+    if payment.payment_type != "W":
+        return []
+    return [
+        (key, message)
+        for key, _label, message in REQUIRED_FOR_DEPOSIT
+        if not getattr(payment, key).strip()
+    ]
 
 
 def check(payment: Payment, strict: bool = True) -> list[str]:

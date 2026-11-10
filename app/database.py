@@ -9,7 +9,7 @@ import os
 from .models import Payment, account_digits, valid_nrb
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class DatabaseOpenError(RuntimeError):
@@ -49,11 +49,17 @@ class Database:
             raise DatabaseOpenError(self.path, exc) from exc
 
     def run_migrations(self):
-        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < SCHEMA_VERSION:
-            # v1: schemat bazowy; przyszłe migracje ALTER TABLE tutaj.
-            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            self.conn.commit()
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+            if version < 2:
+                self.conn.execute("""CREATE TABLE IF NOT EXISTS senders (
+                    name TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    account TEXT NOT NULL,
+                    PRIMARY KEY (name, address, account)
+                )""")
+                self.conn.execute("PRAGMA user_version = 2")
 
     def _initialize_recipients(self):
         with self.conn:
@@ -119,6 +125,20 @@ class Database:
         ]
         return sorted(matches, key=lambda row: (row["name"].casefold(), row["account"]))
 
+    def remember_sender(self, data: Payment) -> None:
+        name = data.payer.strip()
+        account = data.payer_account.strip() if data.payment_type == "P" else ""
+        if not name or (account and not valid_nrb(account)):
+            raise ValueError("Podaj nazwę nadawcy i sprawdź podany rachunek.")
+        with self.conn:
+            self.conn.execute("""INSERT INTO senders (name, address, account)
+                VALUES (?, ?, ?) ON CONFLICT(name, address, account) DO NOTHING""",
+                (name, data.payer_address.strip(), account_digits(account)))
+
+    def senders(self) -> list[dict]:
+        rows = self.conn.execute("SELECT name, address, account FROM senders").fetchall()
+        return sorted(map(dict, rows), key=lambda row: (row["name"].casefold(), row["address"], row["account"]))
+
     def save(self, data: Payment, payment_id: int | None = None) -> int:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         values = (now, data.recipient.strip(), data.recipient_account.strip(),
@@ -163,6 +183,7 @@ class Database:
             "schema_version": SCHEMA_VERSION,
             "payments": [dict(r) for r in self.conn.execute("SELECT * FROM payments").fetchall()],
             "recipients": [dict(r) for r in self.conn.execute("SELECT * FROM recipients").fetchall()],
+            "senders": self.senders(),
         }
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -170,7 +191,7 @@ class Database:
         path = Path(path)
         data = json.loads(path.read_text(encoding="utf-8"))
         if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
-                or data["schema_version"] != SCHEMA_VERSION
+                or data["schema_version"] not in (1, SCHEMA_VERSION)
                 or not isinstance(data.get("payments"), list)
                 or not isinstance(data.get("recipients"), list)):
             raise ValueError("Nieprawidłowy lub nieobsługiwany format kopii zapasowej.")
@@ -202,6 +223,16 @@ class Database:
         for row in data["recipients"]:
             if (not isinstance(row, dict) or any(not isinstance(row.get(k), str) for k in recipient_keys)):
                 raise ValueError("Nieprawidłowy odbiorca w kopii zapasowej.")
+        senders = data.get("senders") if data["schema_version"] == 2 else None
+        if data["schema_version"] == 2:
+            if not isinstance(senders, list):
+                raise ValueError("Brak prawidłowej listy nadawców w kopii zapasowej.")
+            for row in senders:
+                if (not isinstance(row, dict)
+                        or any(not isinstance(row.get(k), str) for k in ("name", "address", "account"))
+                        or not row["name"].strip()
+                        or (row["account"] and not valid_nrb(row["account"]))):
+                    raise ValueError("Nieprawidłowy nadawca w kopii zapasowej.")
 
         fd, backup_name = tempfile.mkstemp(prefix="historia-przed-importem-", suffix=".sqlite3", dir=self.path.parent)
         os.close(fd)
@@ -223,7 +254,11 @@ class Database:
                     """INSERT INTO recipients (name_key, account, name, address) VALUES (?, ?, ?, ?)""",
                     (row["name_key"], row["account"], row["name"], row["address"]),
                 )
-        self.run_migrations()
+            if senders is not None:
+                self.conn.execute("DELETE FROM senders")
+                self.conn.executemany("INSERT INTO senders (name, address, account) VALUES (?, ?, ?)",
+                    ((row["name"].strip(), row["address"].strip(), account_digits(row["account"]))
+                     for row in senders))
         return backup_path
 
     def close(self):
